@@ -186,6 +186,25 @@ npm run b
 ./node_modules/.bin/electron-builder --linux --arm64
 ```
 
+## Mac 本地构建（无需 Apple 开发者证书）
+
+如果你在 macOS 上自行编译 dmg，但没有配置 Apple Developer ID 证书和 notarization（公证）环境，
+安装后双击会报错：**"electerm cannot be opened because of a problem"**。
+
+原因：`build/electron-builder.json` 默认开启了 `"notarize": true`，
+但没有 Apple 凭据时公证会静默失败，生成的 app 虽然签名有效（`codesign` 通过），
+却没有 Apple 公证票据，Gatekeeper 会直接拒绝（`spctl` 返回 rejected）。
+
+
+### 解决方案：手动指定本地配置
+
+```bash
+npm run b
+./node_modules/.bin/electron-builder --mac --arm64 --config build/electron-builder-local-mac.json
+# 安装后需要执行：
+xattr -cr /Applications/electerm.app
+```
+
 ## 使用视频
 
 - [https://electerm.html5beta.com/videos](https://electerm.html5beta.com/videos)

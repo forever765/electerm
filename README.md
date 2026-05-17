@@ -188,6 +188,14 @@ npm run pb
 ./node_modules/.bin/electron-builder --linux --arm64
 ```
 
+## Mac Local Build（without Apple developer certificate）
+```bash
+npm run b
+./node_modules/.bin/electron-builder --mac --arm64 --config build/electron-builder-local-mac.json
+# install dmg and execute: 
+xattr -cr /Applications/electerm.app
+```
+
 ## Video guide
 
 - [https://electerm.html5beta.com/videos](https://electerm.html5beta.com/videos)
