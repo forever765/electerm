@@ -1,0 +1,64 @@
+{
+  "appId": "org.electerm.electerm",
+  "directories": {
+    "app": "work/app",
+    "output": "dist",
+    "buildResources": "node_modules/@electerm/electerm-resource/build-res"
+  },
+  "electronLanguages": ["en-US"],
+  "asar": true,
+  "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+  "protocols": [
+    {
+      "name": "SSH Protocol",
+      "schemes": ["ssh"]
+    },
+    {
+      "name": "Telnet Protocol",
+      "schemes": ["telnet"]
+    },
+    {
+      "name": "RDP Protocol",
+      "schemes": ["rdp"]
+    },
+    {
+      "name": "VNC Protocol",
+      "schemes": ["vnc"]
+    },
+    {
+      "name": "Serial Protocol",
+      "schemes": ["serial"]
+    },
+    {
+      "name": "Spice Protocol",
+      "schemes": ["spice"]
+    },
+    {
+      "name": "Electerm Protocol",
+      "schemes": ["electerm"]
+    }
+  ],
+  "mac": {
+    "category": "public.app-category.developer-tools",
+    "target": "dmg",
+    "icon": "node_modules/@electerm/electerm-resource/build/icons.icns",
+    "hardenedRuntime": false,
+    "gatekeeperAssess": false,
+    "notarize": false,
+    "identity": null
+  },
+  "dmg": {
+    "contents": [
+      {
+        "x": 110,
+        "y": 190
+      },
+      {
+        "x": 440,
+        "y": 190,
+        "type": "link",
+        "path": "/Applications"
+      }
+    ]
+  }
+}
