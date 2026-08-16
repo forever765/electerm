@@ -35,3 +35,16 @@
       top 10px !important
       right 10px !important
       bottom 10px !important
+
+// while the touch shortcut bar (portaled to body, z-index 800 — see
+// shortcut-bar.styl) is shown, shrink the fullscreen session by the bar
+// height so the terminal is not covered. body.shortcut-bar-on is toggled by
+// shortcut-bar.jsx; the extra body class gives this rule higher specificity
+// (0,4,0) than the .fullscreen rules above, so it wins the !important battle.
+body.shortcut-bar-on
+  .fullscreen
+    .session-wrap.session-current
+      bottom var(--shortcut-bar-h, 44px) !important
+      height auto !important
+      .term-wrap
+        height calc(100% - var(--shortcut-bar-h, 44px)) !important
