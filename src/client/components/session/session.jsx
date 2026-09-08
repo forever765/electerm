@@ -46,7 +46,6 @@ export default class SessionWrapper extends Component {
       key: Math.random(),
       splitSize: [50, 50],
       sessionOptions: null,
-      delKeyPressed: false,
       broadcastInput: false,
       keepaliveEnabled: false,
       wrapDisabled: false
@@ -58,10 +57,6 @@ export default class SessionWrapper extends Component {
 
   minWithForSplit = 640
   minHeightForSplit = 400
-
-  componentWillUnmount () {
-    clearTimeout(this.backspaceKeyPressedTimer)
-  }
 
   getDom = () => {
     return this.domRef.current
@@ -176,27 +171,6 @@ export default class SessionWrapper extends Component {
   onDragEnd = (e) => {
     this.clearCls()
     e && e.dataTransfer && e.dataTransfer.clearData()
-  }
-
-  onDelKeyPressed = () => {
-    this.setState({
-      delKeyPressed: true
-    })
-    this.backspaceKeyPressedTimer = setTimeout(() => {
-      this.setState({
-        delKeyPressed: false
-      })
-    }, 5000)
-  }
-
-  handleChangeDelMode = (backspaceMode) => {
-    this.setState({
-      backspaceMode
-    })
-  }
-
-  handleDismissDelKeyTip = () => {
-    window.store.dismissDelKeyTip()
   }
 
   setCwd = (cwd) => {
@@ -351,8 +325,7 @@ export default class SessionWrapper extends Component {
         this,
         [
           'onChangePane',
-          'setCwd',
-          'onDelKeyPressed'
+          'setCwd'
         ]),
       ...this.computePosition(),
       width,
@@ -498,6 +471,15 @@ export default class SessionWrapper extends Component {
     refs.get('term-' + this.props.tab.id)?.toggleSearch()
   }
 
+  handleZoomFontSize = (v) => {
+    const term = refs.get('term-' + this.props.tab.id)
+    if (!term?.term) {
+      return
+    }
+    term.zoom(v)
+    term.term.focus()
+  }
+
   toggleWrap = () => {
     const termRef = refs.get('term-' + this.props.tab.id)
     if (!termRef?.term) {
@@ -625,6 +607,7 @@ export default class SessionWrapper extends Component {
         <SessionControl
           tab={this.props.tab}
           isMobile={window.store.isMobile}
+          isTouchDevice={window.store.isTouchDevice}
           isDisabled={this.isDisabled()}
           isSshDisabled={this.isSshDisabled()}
           isNotTerminalType={this.isNotTerminalType()}
@@ -633,8 +616,6 @@ export default class SessionWrapper extends Component {
           keepaliveEnabled={this.state.keepaliveEnabled}
           broadcastInput={this.state.broadcastInput}
           wrapDisabled={this.state.wrapDisabled}
-          delKeyPressed={this.state.delKeyPressed}
-          hideDelKeyTip={this.props.hideDelKeyTip}
           onChangePane={(pane) => this.onChangePane(pane)}
           toggleCheckSftpPathFollowSsh={this.toggleCheckSftpPathFollowSsh}
           onSshSftpSplitView={this.handleSshSftpSplitView}
@@ -642,8 +623,8 @@ export default class SessionWrapper extends Component {
           toggleBroadcastInput={this.toggleBroadcastInput}
           toggleWrap={this.toggleWrap}
           onFullscreen={this.handleFullscreen}
+          onZoomFontSize={this.handleZoomFontSize}
           onOpenSearch={this.handleOpenSearch}
-          onDismissDelKeyTip={this.handleDismissDelKeyTip}
           onExitGracefully={this.handleExitGracefully}
         />
         {this.renderViews()}

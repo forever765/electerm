@@ -11,14 +11,16 @@ import {
   leftSideBarOpenKey,
   rightSidebarWidthKey,
   addPanelWidthLsKey,
-  dismissDelKeyTipLsKey,
   connectionMap,
   lastAiChatSessionIdKey,
   mobileBreakpoint,
-  splitMap
+  splitMap,
+  settingAiId,
+  settingSyncId
 } from '../common/constants'
 import * as ls from '../common/safe-local-storage'
 import { refs, refsStatic } from '../components/common/ref'
+import { requireTermOfUse } from '../common/term-of-use'
 import { action } from 'manate'
 import uid from '../common/uid'
 import deepCopy from 'json-deep-copy'
@@ -56,7 +58,9 @@ export default Store => {
   }
 
   Store.prototype.toggleAIConfig = function () {
-    window.store.showAIConfigModal = true
+    requireTermOfUse('ai', () => {
+      window.store.showAIConfigModal = true
+    })
   }
 
   Store.prototype.onResize = debounce(async function () {
@@ -99,6 +103,18 @@ export default Store => {
   }
 
   Store.prototype.setSettingItem = function (v) {
+    // entering the AI / sync setting page requires the term of use
+    // confirmation first (when the term is defined)
+    if (
+      v && (
+        v.id === settingAiId || v.id === settingSyncId
+      )
+    ) {
+      const type = v.id === settingAiId ? 'ai' : 'sync'
+      return requireTermOfUse(type, () => {
+        window.store.settingItem = v
+      })
+    }
     window.store.settingItem = v
   }
 
@@ -130,10 +146,6 @@ export default Store => {
   Store.prototype.setRightSidePanelWidth = function (v) {
     ls.setItem(rightSidebarWidthKey, v)
     window.store._rightPanelWidth = v
-  }
-  Store.prototype.dismissDelKeyTip = function (v) {
-    ls.setItem(dismissDelKeyTipLsKey, 'y')
-    window.store.hideDelKeyTip = true
   }
   Store.prototype.beforeExit = function (evt) {
     const { confirmBeforeExit } = window.store.config
@@ -193,7 +205,13 @@ export default Store => {
       type,
       authType
     } = tab
-    if (!profile || authType !== 'profiles') {
+    // SSH picks auth type explicitly (password/privateKey/profiles radio),
+    // other types only have the profile dropdown, so a selected profile
+    // always means profile auth for them
+    const useProfile = type === connectionMap.ssh
+      ? authType === 'profiles'
+      : true
+    if (!profile || !useProfile) {
       return tab
     }
     let p = window.store.profiles.find(x => x.id === profile)
@@ -224,10 +242,17 @@ export default Store => {
         ...tab,
         ...filtered
       }
+    } else if (type === connectionMap.ftp) {
+      const filtered = pickBy(p.ftp, (value) => value !== undefined && value !== '')
+      return {
+        ...tab,
+        ...filtered
+      }
     }
     delete p.rdp
     delete p.vnc
     delete p.telnet
+    delete p.ftp
     const filtered = pickBy(p, (value) => value !== undefined && value !== '')
     return {
       ...tab,
@@ -352,7 +377,10 @@ export default Store => {
           content: 'Understood. I will use this context as we continue.'
         })
       } else {
-        messages.push({ role: 'user', content: entry.prompt })
+        messages.push({
+          role: 'user',
+          content: entry.promptWithAttachments || entry.prompt
+        })
         if (entry.response) {
           messages.push({ role: 'assistant', content: entry.response })
         }
@@ -455,6 +483,11 @@ export default Store => {
     let i = len - 1
     for (;i >= 0; i--) {
       const f = profiles[i]
+      // migrate old rdp profile key userName -> username
+      if (f.rdp?.userName !== undefined) {
+        f.rdp.username = f.rdp.userName
+        delete f.rdp.userName
+      }
       if (f.name) {
         continue
       }

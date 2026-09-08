@@ -12,17 +12,18 @@
 
 [English](README.md) | [中文](build/docs/README_cn.md) | [日本語](build/docs/README_jp.md)
 
-Open-sourced terminal/ssh/sftp/telnet/serialport/RDP/VNC/Spice/ftp client(Linux, Mac, Windows, Android, HarmonyOS).
+Open-sourced terminal/ssh/sftp/telnet/serialport/RDP/VNC/Spice/ftp client(Linux, Mac, Windows, Android, HarmonyOS, iOS).
 
-Besides mainstream Windows/macOS/Linux/Android, electerm also supports HarmonyOS, and older systems — Ubuntu 18, Windows 7, macOS 10+, and special Chinese Linux distributions such as UOS, Kylin, and LoongArch (both old-world and new-world).
+Besides mainstream Windows/macOS/Linux/Android, electerm also supports HarmonyOS, iOS, and older systems — Ubuntu 18, Windows 7, macOS 10+, and special Chinese Linux distributions such as UOS, Kylin, and LoongArch (both old-world and new-world).
 
-<p align="center">
+<p>
   <a href="https://electerm.org">Homepage / Downloads</a> ·
   <a href="https://theme.electerm.org">Theme</a> ·
   <a href="https://github.com/electerm/electerm-web-docker">Docker</a> ·
   <a href="https://demo.electerm.org">Online demo</a> ·
   <a href="https://github.com/electerm/electerm-android">Android</a> ·
   <a href="https://github.com/electerm/electerm-harmony">HarmonyOS</a> ·
+  <a href="https://apps.apple.com/cn/app/electerm/id6792971552">Apple App Store</a> ·
   <a href="https://appgallery.huawei.com/app/detail?id=org.electerm.electerm">Huawei AppGallery</a> ·
   <a href="https://www.microsoft.com/store/apps/9NCN7272GTFF">Microsoft Store</a> ·
   <a href="https://snapcraft.io/electerm">Snap Store</a> ·
@@ -30,11 +31,11 @@ Besides mainstream Windows/macOS/Linux/Android, electerm also supports HarmonyOS
   <a href="https://repos.electerm.org/rpm">rpm repo</a>
 </p>
 
-- 🌐 **[electerm online](https://cloud.electerm.org)** — Public free online electerm app
-- 🤖 **[electerm AI](https://ai.electerm.org)** — Free AI for electerm users
-- 💻 **[electerm-web](https://github.com/electerm/electerm-web)** — Web app version running in browser (including mobile device)
+<div>🌐 <strong><a href="https://cloud.electerm.org">electerm online</a></strong> — Public free online electerm app</div>
+<div>🤖 <strong><a href="https://ai.electerm.org">electerm AI</a></strong> — Free AI for electerm users</div>
+<div>💻 <strong><a href="https://github.com/electerm/electerm-web">electerm-web</a></strong> — Web app version running in browser (including mobile device)</div>
 
-## Atlas Cloud
+## Sponsors
 
 <div align="center">
   <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm">
@@ -43,6 +44,20 @@ Besides mainstream Windows/macOS/Linux/Android, electerm also supports HarmonyOS
 </div>
 
 [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm) provides OpenAI-compatible AI APIs and model access for AI-powered workflows in electerm.
+
+----
+
+<div align="center">
+  <br />
+  <br />
+  <a href="https://go.apimart.ai/gh-electerm">
+    <img src="https://github.com/electerm/electerm-resource/blob/master/static/images/apimart.jpg?raw=true" alt="ApiMart" width="200" />
+  </a>
+  <br />
+  <br />
+</div>
+
+Thanks to APIMart for sponsoring electerm! APIMart is a low-cost API platform for AI image & video generation — GPT-Image-2 from $0.006/image, 160+ images per dollar. One async API covers both image and video: submit a task, get an ID, fetch results via polling or callback. Batch tens of thousands of images without timeouts, switch models without changing code. Pay-as-you-go with no monthly fee — [sign up here to get started](https://go.apimart.ai/gh-electerm).
 
 ----
 
@@ -69,7 +84,7 @@ Besides mainstream Windows/macOS/Linux/Android, electerm also supports HarmonyOS
 ## Features
 
 - Works as a terminal/file manager or ssh/sftp/ftp/telnet/serialport/RDP/VNC/Spice client
-- Support Window 7+(X64/ARM64), HarmonyOS，Android, Mac OS 10.15+(x64/arm64), Linux(x64/arm64/Loong64 new world & old world), even old Linux with glibc 2.17+ like UOS/Kylin/Ubuntu 18.04 etc
+- Support Window 7+(X64/ARM64), HarmonyOS，Android, iOS, Mac OS 10.15+(x64/arm64), Linux(x64/arm64/Loong64 new world & old world), even old Linux with glibc 2.17+ like UOS/Kylin/Ubuntu 18.04 etc
 - Global hotkey to toggle window visibility (similar to guake, default is `ctrl + 2`)
 - Multi platform(linux, mac, win)
 - 🇺🇸 🇨🇳 🇧🇷 🇷🇺 🇪🇸 🇫🇷 🇹🇷 🇭🇰 🇯🇵 🇸🇦 🇩🇪 🇰🇷 🇮🇩 🇵🇱 Multi-language support([electerm-locales](https://github.com/electerm/electerm-locales), contributions/fixes welcome)

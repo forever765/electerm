@@ -29,6 +29,7 @@ export const termControlHeight = 32
 export const maxDragMove = 30
 export const splitDraggerWidth = 5
 export const minTerminalWidth = 90
+export const minTerminalFontSize = 5
 export const filePropMinWidth = 1
 export const contextMenuHeight = 28
 export const contextMenuWidth = 280
@@ -201,6 +202,9 @@ export const commonLineEndings = commonTxLineEndings
 export const maxBatchInput = 30
 export const windowControlWidth = 94
 export const mobileBreakpoint = 600
+// breakpoint matching the setting panel's `@media (max-width: 800px)` CSS —
+// must be kept in sync with setting-wrap.styl
+export const settingPanelMobileBreakpoint = 800
 export const baseUpdateCheckUrls = [
   packInfo.homepage,
   'https://gitee.com/github-zxdong262/electerm/raw/gh-pages'
@@ -212,6 +216,16 @@ export const syncTypes = buildConst([
   'cloud',
   'webdav'
 ])
+export const allowedSyncTypes = () => {
+  const custom = window.et.syncTypes
+  if (!Array.isArray(custom)) {
+    return Object.keys(syncTypes)
+  }
+  const list = custom.filter(type => syncTypes[type])
+  return list.length
+    ? list
+    : Object.keys(syncTypes)
+}
 export const syncTokenCreateUrls = {
   gitee: 'https://gitee.com/github-zxdong262/electerm/wikis/Create%20personal%20access%20token?sort_id=3028409',
   github: 'https://github.com/electerm/electerm/wiki/Create-personal-access-token',
@@ -253,7 +267,6 @@ export const resolutionsLsKey = 'custom-resolution-key'
 export const checkedKeysLsKey = 'checked-keys'
 export const quickCommandLabelsLsKey = 'quick-command-label'
 export const localAddrBookmarkLsKey = 'local-addr-bookmark-keys'
-export const dismissDelKeyTipLsKey = 'dismiss-del-key-tip'
 export const treeSortLsKey = 'tree-sort'
 export const sshTunnelHelpLink = 'https://github.com/electerm/electerm/wiki/How-to-use-ssh-tunnel'
 export const proxyHelpLink = 'https://github.com/electerm/electerm/wiki/proxy-format'
@@ -262,6 +275,8 @@ export const connectionHoppingWikiLink = 'https://github.com/electerm/electerm/w
 export const aiConfigWikiLink = 'https://github.com/electerm/electerm/wiki/AI-model-config-guide'
 export const aiChatModeLsKey = 'ai-chat-mode'
 export const lastAiChatSessionIdKey = 'last-ai-chat-session-id'
+export const aiTermOfUseConfirmedLsKey = 'ai-term-of-use-confirmed'
+export const syncTermOfUseConfirmedLsKey = 'sync-term-of-use-confirmed'
 export const modals = {
   hide: 0,
   setting: 1

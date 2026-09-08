@@ -135,6 +135,10 @@
   font-size 10px
   &:hover
     background var(--error)
+// touch screens have no hover — always reveal the close icon
+.is-touch-device
+  .tab-close
+    display block
 
 .tabs-add-btn
   display inline-block
@@ -224,6 +228,10 @@
   padding 0 4px
   height 20px
   line-height 21px
+
+.tab-pin
+  margin-right 3px
+  font-size 11px
 
 .ssh-tunnel-list-wrapper
   max-height 300px

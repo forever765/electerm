@@ -12,17 +12,18 @@
 
 [English](../../README.md) | [中文](README_cn.md) | [日本語](README_jp.md)
 
-オープンソースのターミナル/ssh/sftp/telnet/シリアルポート/RDP/VNC/Spice/ftp クライアント(Linux, Mac, Windows, Android, HarmonyOS)。
+オープンソースのターミナル/ssh/sftp/telnet/シリアルポート/RDP/VNC/Spice/ftp クライアント(Linux, Mac, Windows, Android, HarmonyOS, iOS)。
 
-主流の Windows/macOS/Linux/Android に加えて、electerm は HarmonyOS や、Ubuntu 18、Windows 7、macOS 10 以降といった古いシステム、さらに UOS、Kylin(麒麟)、LoongArch(龍芯、old-world / new-world の両方)などの中国製 Linux ディストリビューションにも対応しています。
+主流の Windows/macOS/Linux/Android に加えて、electerm は HarmonyOS、iOS や、Ubuntu 18、Windows 7、macOS 10 以降といった古いシステム、さらに UOS、Kylin(麒麟)、LoongArch(龍芯、old-world / new-world の両方)などの中国製 Linux ディストリビューションにも対応しています。
 
-<p align="center">
+<p>
   <a href="https://electerm.org">ホームページ / ダウンロード</a> ·
   <a href="https://theme.electerm.org">テーマ</a> ·
   <a href="https://github.com/electerm/electerm-web-docker">Docker</a> ·
   <a href="https://demo.electerm.org">オンラインデモ</a> ·
   <a href="https://github.com/electerm/electerm-android">Android</a> ·
   <a href="https://github.com/electerm/electerm-harmony">HarmonyOS</a> ·
+  <a href="https://apps.apple.com/cn/app/electerm/id6792971552">Apple App Store</a> ·
   <a href="https://appgallery.huawei.com/app/detail?id=org.electerm.electerm">Huawei AppGallery</a> ·
   <a href="https://www.microsoft.com/store/apps/9NCN7272GTFF">Microsoft Store</a> ·
   <a href="https://snapcraft.io/electerm">Snap Store</a> ·
@@ -30,11 +31,11 @@
   <a href="https://repos.electerm.org/rpm">rpm リポジトリ</a>
 </p>
 
-- 🌐 **[electerm online](https://cloud.electerm.org)** — 無料で使える公開オンライン版 electerm
-- 🤖 **[electerm AI](https://ai.electerm.org)** — electerm ユーザー向けの無料 AI
-- 💻 **[electerm-web](https://github.com/electerm/electerm-web)** — ブラウザ(モバイル端末を含む)で動作する Web アプリ版
+<div>🌐 <strong><a href="https://cloud.electerm.org">electerm online</a></strong> — 無料で使える公開オンライン版 electerm</div>
+<div>🤖 <strong><a href="https://ai.electerm.org">electerm AI</a></strong> — electerm ユーザー向けの無料 AI</div>
+<div>💻 <strong><a href="https://github.com/electerm/electerm-web">electerm-web</a></strong> — ブラウザ(モバイル端末を含む)で動作する Web アプリ版</div>
 
-## Atlas Cloud
+## スポンサー
 
 <div align="center">
   <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm">
@@ -43,6 +44,20 @@
 </div>
 
 [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm) は、electerm での AI 活用ワークフロー向けに、OpenAI 互換の AI API とモデルへのアクセスを提供しています。
+
+----
+
+<div align="center">
+  <br />
+  <br />
+  <a href="https://go.apimart.ai/gh-electerm">
+    <img src="https://github.com/electerm/electerm-resource/blob/master/static/images/apimart.jpg?raw=true" alt="ApiMart" width="200" />
+  </a>
+  <br />
+  <br />
+</div>
+
+APIMart が electerm をスポンサーしてくれています！APIMart は、AI 画像・動画生成のための低価格 API プラットフォームです。GPT-Image-2 は 1 枚 $0.006 から、1 ドルで 160 枚以上の画像を生成できます。1 つの非同期 API で画像と動画の両方に対応：タスクを送信して ID を取得し、ポーリングまたはコールバックで結果を取得します。タイムアウトを気にせず数万枚の画像をバッチ処理でき、コードを変更せずにモデルを切り替えられます。従量課金で月額料金なし — [こちらから登録して始めましょう](https://go.apimart.ai/gh-electerm)。
 
 ----
 
@@ -69,7 +84,7 @@
 ## 機能
 
 - ターミナル/ファイルマネージャー、または ssh/sftp/ftp/telnet/シリアルポート/RDP/VNC/Spice クライアントとして動作
-- Windows 7 以降(X64/ARM64)、HarmonyOS、Android、Mac OS 10.15 以降(x64/arm64)、Linux(x64/arm64/Loong64 new world & old world)に対応。UOS/Kylin/Ubuntu 18.04 などの glibc 2.17 以降の古い Linux でも動作
+- Windows 7 以降(X64/ARM64)、HarmonyOS、Android、iOS、Mac OS 10.15 以降(x64/arm64)、Linux(x64/arm64/Loong64 new world & old world)に対応。UOS/Kylin/Ubuntu 18.04 などの glibc 2.17 以降の古い Linux でも動作
 - グローバルホットキーによるウィンドウ表示の切り替え(guake と同様、デフォルトは `ctrl + 2`)
 - マルチプラットフォーム対応(linux, mac, win)
 - 🇺🇸 🇨🇳 🇧🇷 🇷🇺 🇪🇸 🇫🇷 🇹🇷 🇭🇰 🇯🇵 🇸🇦 🇩🇪 🇰🇷 🇮🇩 🇵🇱 多言語対応([electerm-locales](https://github.com/electerm/electerm-locales)、貢献・修正を歓迎します)

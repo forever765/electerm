@@ -19,7 +19,6 @@ import {
   leftSidePanelWidthKey,
   rightSidebarWidthKey,
   addPanelWidthLsKey,
-  dismissDelKeyTipLsKey,
   qmSortByFrequencyKey,
   resolutionsLsKey,
   syncServerDataKey,
@@ -30,7 +29,6 @@ import {
 import * as ls from '../common/safe-local-storage'
 import { exclude } from 'manate'
 import initSettingItem from '../common/init-setting-item'
-import { getRandomDefaultColor } from '../common/rand-hex-color'
 
 const e = window.translate
 
@@ -40,7 +38,7 @@ function getDefaultBookmarkGroups (bookmarks) {
       title: e(defaultBookmarkGroupId),
       id: defaultBookmarkGroupId,
       bookmarkIds: bookmarks.map(d => d.id),
-      color: getRandomDefaultColor()
+      color: '#0088cc'
     })
   ]
 }
@@ -136,6 +134,8 @@ export default () => {
     settingTab: settingMap.bookmarks, // setting tab
     bookmarkId: undefined,
     showModal: 0,
+    // mobile settings view: 'menu' (left col list, default) or 'content' (right col)
+    settingMobileView: 'menu',
 
     // setting sync related
     autoSyncReady: false,
@@ -169,6 +169,9 @@ export default () => {
 
     // touch-only shortcut bar (see components/terminal/shortcut-bar-entry.jsx)
     shortcutBarVisible: false,
+    // px the bar is lifted above a page-overlaying system input panel
+    // (iOS / HarmonyOS) — see shortcut-bar.jsx
+    shortcutBarKbOffset: 0,
 
     // sidebar
     openedSideBar: ls.getItem(openedSidebarKey) || '',
@@ -212,8 +215,12 @@ export default () => {
     isMaximized: window.pre.runSync('isMaximized'),
     hasNodePty: window.pre.runSync('nodePtyCheck'),
     isMobile: window.innerWidth <= mobileBreakpoint,
+    // reflects the input device actually in use, not screen capability — a
+    // capability probe only proves the screen can be touched, not whether the
+    // user operates it by touch. Seeded false and left to main.jsx, which sets
+    // mouse → false / touch → true on the first real pointer event.
+    isTouchDevice: false,
     fullscreen: false,
-    hideDelKeyTip: ls.getItem(dismissDelKeyTipLsKey) === 'y',
     tabsHeight: 36,
 
     // widgets

@@ -13,17 +13,18 @@
 [English](../../README.md) | [中文](README_cn.md) | [日本語](README_jp.md)
 
 
-开源终端/ssh/telnet/serialport/RDP/VNC/Spice/sftp/ftp客户端(Linux, Mac, Windows, Android, HarmonyOS)。
+开源终端/ssh/telnet/serialport/RDP/VNC/Spice/sftp/ftp客户端(Linux, Mac, Windows, Android, HarmonyOS, iOS)。
 
-除了主流的 Windows/macOS/Linux/Android，electerm 还支持鸿蒙(HarmonyOS)，以及老旧系统——如 Ubuntu 18、Windows 7、macOS 10+，以及国产特殊 Linux 发行版如 UOS、麒麟(Kylin)、龙芯(LoongArch，含旧世界与新世界)。
+除了主流的 Windows/macOS/Linux/Android，electerm 还支持鸿蒙(HarmonyOS)、iOS，以及老旧系统——如 Ubuntu 18、Windows 7、macOS 10+，以及国产特殊 Linux 发行版如 UOS、麒麟(Kylin)、龙芯(LoongArch，含旧世界与新世界)。
 
-<p align="center">
+<p>
   <a href="https://electerm.org">主页 / 下载</a> ·
   <a href="https://theme.electerm.org">主题</a> ·
   <a href="https://github.com/electerm/electerm-web-docker">Docker</a> ·
   <a href="https://demo.electerm.org">在线演示</a> ·
   <a href="https://github.com/electerm/electerm-android">Android</a> ·
   <a href="https://github.com/electerm/electerm-harmony">鸿蒙</a> ·
+  <a href="https://apps.apple.com/cn/app/electerm/id6792971552">App Store</a> ·
   <a href="https://appgallery.huawei.com/app/detail?id=org.electerm.electerm">华为应用市场</a> ·
   <a href="https://www.microsoft.com/store/apps/9NCN7272GTFF">微软商店</a> ·
   <a href="https://snapcraft.io/electerm">Snap 商店</a> ·
@@ -31,11 +32,11 @@
   <a href="https://repos.electerm.org/rpm">rpm 仓库</a>
 </p>
 
-- 🌐 **[electerm 在线版](https://cloud.electerm.org)** — 公共免费在线 electerm 应用
-- 🤖 **[electerm AI](https://ai.electerm.org)** — 免费为 electerm 用户提供 AI
-- 💻 **[electerm-web](https://github.com/electerm/electerm-web)** — 运行于浏览器(支持移动设备)的 web app 版本
+<div>🌐 <strong><a href="https://cloud.electerm.org">electerm 在线版</a></strong> — 公共免费在线 electerm 应用</div>
+<div>🤖 <strong><a href="https://ai.electerm.org">electerm AI</a></strong> — 免费为 electerm 用户提供 AI</div>
+<div>💻 <strong><a href="https://github.com/electerm/electerm-web">electerm-web</a></strong> — 运行于浏览器(支持移动设备)的 web app 版本</div>
 
-## Atlas Cloud
+## 赞助商
 
 <div align="center">
   <a href="https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm">
@@ -44,6 +45,20 @@
 </div>
 
 [Atlas Cloud](https://www.atlascloud.ai/?utm_source=github&utm_medium=link&utm_campaign=electerm) 提供与 OpenAI 兼容的 AI API 和模型访问，用于在 electerm 中实现 AI 驱动的工作流程。
+
+----
+
+<div align="center">
+  <br />
+  <br />
+  <a href="https://go.apimart.ai/gh-electerm">
+    <img src="https://github.com/electerm/electerm-resource/blob/master/static/images/apimart.jpg?raw=true" alt="ApiMart" width="200" />
+  </a>
+  <br />
+  <br />
+</div>
+
+感谢 APIMart 赞助 electerm！APIMart 是一个低成本的 AI 图像和视频生成 API 平台 —— GPT-Image-2 低至 $0.006/张，1 美元可生成 160+ 张图片。一个异步 API 同时支持图像和视频：提交任务，获取任务 ID，通过轮询或回调获取结果。可批量生成数万张图片而不超时，切换模型无需修改代码。按量付费，无月费 —— [点击这里注册开始使用](https://go.apimart.ai/gh-electerm)。
 
 ----
 
@@ -70,7 +85,7 @@
 ## 功能特性
 
 - 支持ssh,telnet,serialport,RDP,VNC,Spice,本地和远程文件管理，sftp/ftp文件传输，以及作为本地终端使用
-- 支持Window 7+(X64/ARM64), 鸿蒙, 安卓, Mac OS 10.15+(x64/arm64), Linux(x64/arm64/Loong64), 以及Linux with glibc 2.17+ like UOS/Kylin/Ubuntu 18.04 etc
+- 支持Window 7+(X64/ARM64), 鸿蒙, 安卓, iOS, Mac OS 10.15+(x64/arm64), Linux(x64/arm64/Loong64), 以及Linux with glibc 2.17+ like UOS/Kylin/Ubuntu 18.04 etc
 - 全局快捷键切换隐藏显示窗口(类似guake, 默认快捷键`ctrl + 2`)
 - 多平台支持(linux, mac, win)
 - 🇺🇸 🇨🇳 🇧🇷 🇷🇺 🇪🇸 🇫🇷 🇹🇷 🇭🇰 🇯🇵 🇸🇦 🇩🇪 🇰🇷 🇮🇩 🇵🇱 多国语言支持([electerm-locales](https://github.com/electerm/electerm-locales), 欢迎提交代码)

@@ -137,6 +137,30 @@ function attachSftp (sftp, rootDir) {
     mtime: Math.floor(st.mtimeMs / 1000)
   })
 
+  const modeFileType = (mode) => {
+    const t = mode & 0o170000
+    return t === 0o040000 ? 'd' : t === 0o120000 ? 'l' : '-'
+  }
+
+  const modeToPermStr = (mode) => {
+    const part = (r, w, x) =>
+      (mode & r ? 'r' : '-') + (mode & w ? 'w' : '-') + (mode & x ? 'x' : '-')
+    return modeFileType(mode) +
+      part(0o400, 0o200, 0o100) +
+      part(0o040, 0o020, 0o010) +
+      part(0o004, 0o002, 0o001)
+  }
+
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+  // ls-style longname: drwxr-xr-x 1 uid gid size mtime name
+  const toLongname = (name, st) => {
+    const d = new Date(st.mtimeMs)
+    const time = `${months[d.getMonth()]} ${String(d.getDate()).padStart(2)}` +
+      ` ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    return `${modeToPermStr(st.mode)}  1 ${st.uid} ${st.gid} ${st.size} ${time} ${name}`
+  }
+
   sftp.on('REALPATH', (reqID, p) => {
     sftp.name(reqID, [{ filename: path.posix.normalize(`/${p || '/'}`), longname: '', attrs: {} }])
   })
@@ -159,7 +183,7 @@ function attachSftp (sftp, rootDir) {
     fs.readdir(confine(p), { withFileTypes: true }, (err, entries) => {
       if (err) return fail(reqID, err)
       const handle = Buffer.from(`dir-${++handleCount}`)
-      openDirs.set(handle.toString(), { entries, sent: false })
+      openDirs.set(handle.toString(), { entries, dirPath: confine(p), sent: false })
       sftp.handle(reqID, handle)
     })
   })
@@ -169,12 +193,25 @@ function attachSftp (sftp, rootDir) {
     if (!dir) return sftp.status(reqID, STATUS_CODE.FAILURE)
     if (dir.sent) return sftp.status(reqID, STATUS_CODE.EOF)
     dir.sent = true
-    const names = dir.entries.map(e => ({
-      filename: e.name,
-      longname: e.name,
-      attrs: {}
+    Promise.all(dir.entries.map(e => {
+      return new Promise(resolve => {
+        fs.lstat(path.join(dir.dirPath, e.name), (err, st) => {
+          if (err) {
+            return resolve({
+              filename: e.name,
+              longname: e.name,
+              attrs: {}
+            })
+          }
+          resolve({
+            filename: e.name,
+            longname: toLongname(e.name, st),
+            attrs: toAttrs(st)
+          })
+        })
+      })
     }))
-    sftp.name(reqID, names)
+      .then(names => sftp.name(reqID, names))
   })
 
   sftp.on('OPEN', (reqID, filename, pflags) => {
@@ -232,7 +269,10 @@ function attachSftp (sftp, rootDir) {
 }
 
 function startTestSshServer ({ port = TEST_PORT, rootDir } = {}) {
+  const clients = new Set()
   const server = new Server({ hostKeys: [HOST_KEY_PRIVATE] }, (client) => {
+    clients.add(client)
+    client.on('close', () => clients.delete(client))
     client.on('authentication', (ctx) => {
       if (ctx.method === 'password' &&
         ctx.username === TEST_USERNAME &&
@@ -261,6 +301,8 @@ function startTestSshServer ({ port = TEST_PORT, rootDir } = {}) {
     })
     client.on('error', () => {})
   })
+  // expose tracked clients so stopTestSshServer can end live connections
+  server._clients = clients
   return new Promise((resolve, reject) => {
     server.once('error', reject)
     server.listen(port, '127.0.0.1', () => {
@@ -270,8 +312,41 @@ function startTestSshServer ({ port = TEST_PORT, rootDir } = {}) {
   })
 }
 
+// Stop the test server, ending live client connections first.
+// Server.close() waits for existing connections to end — without ending
+// them the callback never fires and callers hang. The timeout is a safety
+// net so a lingering socket can never hang the suite.
+function stopTestSshServer (server) {
+  return new Promise(resolve => {
+    let done = false
+    const finish = () => {
+      if (!done) {
+        done = true
+        resolve()
+      }
+    }
+    const timer = setTimeout(finish, 5000)
+    try {
+      for (const client of server._clients || []) {
+        try {
+          client.end()
+        } catch (_) {
+          // already gone
+        }
+      }
+    } catch (_) {
+      // best effort — fall through to close()
+    }
+    server.close(() => {
+      clearTimeout(timer)
+      finish()
+    })
+  })
+}
+
 module.exports = {
   startTestSshServer,
+  stopTestSshServer,
   ensureKnownHostsEntry,
   HOST_KEY_PUBLIC,
   TEST_USERNAME,

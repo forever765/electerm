@@ -22,7 +22,8 @@ import {
   isMac,
   isMacJs,
   connectionMap,
-  terminalSerialType
+  terminalSerialType,
+  minTerminalFontSize
 } from '../../common/constants.js'
 import deepCopy from 'json-deep-copy'
 import { readClipboardAsync, readClipboard, copy } from '../../common/clipboard.js'
@@ -369,13 +370,21 @@ class Term extends Component {
     if (!term) {
       return
     }
-    term.options.fontSize = term.options.fontSize + v
+    const next = Math.max(
+      minTerminalFontSize,
+      term.options.fontSize + v
+    )
+    const changed = next - term.options.fontSize
+    if (changed === 0) {
+      return
+    }
+    term.options.fontSize = next
     window.store.triggerResize()
     if (this.originalFontSize == null) {
-      this.originalFontSize = term.options.fontSize - v
+      this.originalFontSize = next - changed
     }
     this.setState({
-      fontSizeChanged: term.options.fontSize !== this.originalFontSize
+      fontSizeChanged: next !== this.originalFontSize
     })
   }
 
@@ -1476,31 +1485,35 @@ class Term extends Component {
 
   /**
    * xterm computes its DOM selection colour as blend(theme.background,
-   * selectionBackground). The DOM renderer keeps the terminal background
-   * transparent (rgba(0,0,0,0)) so electerm's own CSS background / image
-   * shows through, which makes a light selection blend over transparent-black
-   * and render as dark gray. Recompute the selection over the real visible
-   * background so terminal:selectionBackground=rgba(...) is applied as the
-   * configured semi-transparent colour.
+   * selectionBackground). The terminal background is forced transparent
+   * (rgba(0,0,0,0)) so electerm's own CSS background / image shows through,
+   * which makes the blend run over transparent-black. Recompute the selection
+   * colours over the real visible background, from the *configured* theme
+   * colours — xterm's internal selectionBackgroundTransparent forces opaque
+   * colours down to 0.3 alpha (xterm#2737), which would make every selection
+   * translucent even when the user configured an opaque one.
    */
   fixSelectionColors = (term) => {
+    const themeConfig = this.props.themeConfig || {}
     const themeService = term?._core?._themeService
     if (!themeService?.modifyColors) {
       return
     }
     const visibleBackground = this.getVisibleTerminalBackground()
-    const colors = themeService.colors
+    // xterm's DEFAULT_SELECTION, used when the theme omits a selection color
+    const selectionFallback = 'rgba(255, 255, 255, 0.3)'
+    const inactiveFallback = themeConfig.selectionBackground || selectionFallback
     themeService.modifyColors((c) => {
       const active = blendSelectionOverBackground(
         visibleBackground,
-        colors.selectionBackgroundTransparent
+        themeConfig.selectionBackground || selectionFallback
       )
       if (active) {
         c.selectionBackgroundOpaque = active
       }
       const inactive = blendSelectionOverBackground(
         visibleBackground,
-        colors.selectionInactiveBackgroundTransparent
+        themeConfig.selectionInactiveBackground || inactiveFallback
       )
       if (inactive) {
         c.selectionInactiveBackgroundOpaque = inactive
@@ -1721,12 +1734,6 @@ class Term extends Component {
     }
 
     this.shellType = shellType
-    if (shellType === 'fish') {
-      if (this.props.sftpPathFollowSsh) {
-        this.warnSftpFollowUnsupported()
-      }
-      return Promise.resolve()
-    }
 
     // Don't inject for sh type shells unless sftpPathFollowSsh is true
     if (shellType === 'sh' && !this.props.sftpPathFollowSsh) {
@@ -1944,6 +1951,17 @@ class Term extends Component {
     if (this.isElementVisible()) {
       this.fitAddon.fit()
     }
+    // Force-send the current size now that `this.pid` is finally valid.
+    // A resize may already have fired earlier (e.g. from the tab-becomes-
+    // visible fit in componentDidUpdate, which can run before createTerm()
+    // resolves) while this.pid was still undefined - the backend silently
+    // drops resize calls for an unknown pid. If that earlier call already
+    // updated term.cols/rows locally, xterm's resize() no-ops on the next
+    // fit() (dims unchanged) and never fires onResize again, so the
+    // backend pty would otherwise be stuck at its initial (possibly wrong)
+    // size forever. Sending explicitly here, keyed off the real pid,
+    // guarantees the remote pty/ssh channel is told the true current size.
+    resizeTerm(this.pid, term.cols, term.rows)
     term.displayRaw = displayRaw
     term.loadAddon(
       new KeywordHighlighterAddon(keywords)

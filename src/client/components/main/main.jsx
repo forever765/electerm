@@ -38,6 +38,7 @@ import BookmarkFromHistoryModal from '../bookmark-form/bookmark-from-history-mod
 import AutoSync from '../setting-sync/auto-sync'
 import BatchOpRunner from '../batch-op/batch-op-runner'
 import UnixTimestampTooltip from '../terminal/unix-timestamp-tooltip'
+import ImportProgress from '../common/import-progress.jsx'
 import { pick } from 'lodash-es'
 import deepCopy from 'json-deep-copy'
 import './wrapper.styl'
@@ -85,6 +86,30 @@ export default auto(function Index (props) {
     store.checkPendingDeepLink()
   }, [])
 
+  // Track the actual input modality rather than a static capability probe:
+  // a touch-capable laptop is a mouse machine until a real touch happens,
+  // and a tablet stays touch even though it can also pair a mouse. Stored in
+  // `store.isTouchDevice` (seeded false — no upfront probe, which only says
+  // the screen *can* be touched, not what the user operates with); the
+  // `is-touch-device` class drives always-visible hover-only action icons, so
+  // it must follow the device the user is actually operating.
+  useEffect(() => {
+    const { store } = window
+    const handlePointer = (e) => {
+      if (e.pointerType === 'mouse') {
+        store.isTouchDevice = false
+      } else if (e.pointerType === 'touch' || e.pointerType === 'pen') {
+        store.isTouchDevice = true
+      }
+    }
+    document.addEventListener('pointerdown', handlePointer)
+    document.addEventListener('pointermove', handlePointer)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointer)
+      document.removeEventListener('pointermove', handlePointer)
+    }
+  }, [])
+
   const { store } = props
   const {
     configLoaded,
@@ -121,7 +146,8 @@ export default auto(function Index (props) {
     'fs-with-footer': fullscreen && store.inActiveTerminal,
     'is-main': !isSecondInstance,
     'is-mobile': store.isMobile,
-    'is-desktop': !store.isMobile
+    'is-desktop': !store.isMobile,
+    'is-touch-device': store.isTouchDevice
   })
   const ext1 = {
     className: cls,
@@ -318,6 +344,7 @@ export default auto(function Index (props) {
         <BookmarkFromHistoryModal />
         <NotificationContainer />
         <BatchOpRunner />
+        <ImportProgress />
         <ShortcutBarEntry store={store} />
         {!isAIDisabled() && <AIConfigModal store={store} />}
         <UnixTimestampTooltip />

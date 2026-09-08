@@ -23,6 +23,7 @@ const path = require('path')
 
 const {
   startTestSshServer,
+  stopTestSshServer,
   ensureKnownHostsEntry,
   TEST_USERNAME,
   TEST_PASSWORD,
@@ -100,11 +101,21 @@ async function makeStreamGetRequest (urlStr, headers = {}, timeoutMs = 5000) {
   })
 }
 
-function parseSseBody (body) {
-  const dataLine = (typeof body === 'string' ? body : JSON.stringify(body))
-    .split('\n').find(l => l.startsWith('data: '))
-  if (!dataLine) return null
-  return JSON.parse(dataLine.slice(6))
+// The server may return either a plain JSON body or an SSE stream
+// (text/event-stream with a `data: ` line). Support both transparently.
+function parseResponseBody (body) {
+  if (body === null || body === undefined) return null
+  // Already a parsed object (axios auto-parsed application/json)
+  if (typeof body === 'object' && !Array.isArray(body)) return body
+  const str = String(body)
+  // SSE format: look for a `data: ` line
+  if (str.includes('data: ')) {
+    const dataLine = str.split('\n').find(l => l.startsWith('data: '))
+    if (!dataLine) return null
+    return JSON.parse(dataLine.slice(6))
+  }
+  // Plain JSON
+  return JSON.parse(str)
 }
 
 async function initSession ({ protocolVersion = '2025-11-25', withTasksCap = false } = {}) {
@@ -125,7 +136,7 @@ async function initSession ({ protocolVersion = '2025-11-25', withTasksCap = fal
   })
   const sid = res.headers['mcp-session-id']
   assert.ok(sid && sid !== 'null', `expected a real session ID, got: ${sid}`)
-  return { sid, init: parseSseBody(res.data) }
+  return { sid, init: parseResponseBody(res.data) }
 }
 
 let requestId = 1000
@@ -151,8 +162,8 @@ async function callTool (sid, toolName, args, { withTasksCap = false } = {}) {
     'mcp-session-id': sid
   })
   assert.equal(res.status, 200)
-  const jsonData = parseSseBody(res.data)
-  assert.ok(jsonData, `No SSE data in response for ${toolName}`)
+  const jsonData = parseResponseBody(res.data)
+  assert.ok(jsonData, `No response data for ${toolName}`)
   assert.equal(jsonData.id, id)
   return jsonData
 }
@@ -170,7 +181,7 @@ async function callMethod (sid, method, params) {
     'mcp-session-id': sid
   })
   assert.equal(res.status, 200)
-  return parseSseBody(res.data)
+  return parseResponseBody(res.data)
 }
 
 // Parse the JSON payload of a successful tool result
@@ -269,7 +280,7 @@ describe('MCP server integration (live app + in-process SSH server)', () => {
 
   after(async () => {
     if (sshServer) {
-      await new Promise(resolve => sshServer.close(resolve))
+      await stopTestSshServer(sshServer)
     }
     if (sftpRoot) {
       fs.rmSync(sftpRoot, { recursive: true, force: true })
@@ -300,6 +311,10 @@ describe('MCP server integration (live app + in-process SSH server)', () => {
     const b = await initSession({ protocolVersion: '2025-11-25' })
     assert.equal(b.init.result.protocolVersion, '2025-11-25')
 
+    // Widely-deployed revision (rmcp/Claude Code era clients) must be echoed
+    const c6 = await initSession({ protocolVersion: '2025-06-18' })
+    assert.equal(c6.init.result.protocolVersion, '2025-06-18')
+
     const c = await initSession({ protocolVersion: '1999-01-01' })
     assert.equal(c.init.result.protocolVersion, '2025-11-25', 'unknown version must fall back to newest supported')
   })
@@ -310,6 +325,87 @@ describe('MCP server integration (live app + in-process SSH server)', () => {
     const ext = init.result.capabilities.extensions
     assert.ok(ext, 'capabilities.extensions must exist (enableTasks defaults to true)')
     assert.ok('io.modelcontextprotocol/tasks' in ext)
+  })
+
+  test('initialize returns application/json content-type (not SSE)', { timeout: 30000 }, async (t) => {
+    if (skipOffline(t)) return
+    const res = await makeHttpRequest('post', serverUrl, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-11-25',
+        capabilities: {},
+        clientInfo: { name: 'electerm-content-type-test', version: '1.0.0' }
+      }
+    }, {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream'
+    })
+    assert.equal(res.status, 200)
+    assert.equal(
+      res.headers['content-type'], 'application/json; charset=utf-8',
+      'initialize must return JSON (not text/event-stream) for client compatibility'
+    )
+    assert.ok(res.headers['mcp-session-id'], 'session ID must be in response headers')
+  })
+
+  test('notifications/initialized handshake completes the session', { timeout: 30000 }, async (t) => {
+    if (skipOffline(t)) return
+    // 1. initialize
+    const { sid, init } = await initSession()
+    assert.ok(init.result, 'initialize must return a result')
+
+    // 2. Send notifications/initialized — this is the step that was failing
+    //    with Codex/rmcp: a 200 with an empty body (no Content-Type) is a
+    //    fatal UnexpectedContentType error in Codex's HTTP adapter. The MCP
+    //    Streamable HTTP spec requires 202 Accepted with no body.
+    const res = await makeHttpRequest('post', serverUrl, {
+      jsonrpc: '2.0',
+      method: 'notifications/initialized'
+    }, {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      'mcp-session-id': sid
+    })
+    assert.equal(res.status, 202, 'notifications/initialized must return 202 Accepted per spec')
+
+    // 3. The session is now usable — tools/list must work
+    const tools = await callMethod(sid, 'tools/list', {})
+    assert.ok(tools.result.tools.length > 0, 'session must be usable after handshake')
+  })
+
+  test('JSON-RPC responses use application/json content-type', { timeout: 30000 }, async (t) => {
+    if (skipOffline(t)) return
+    const { sid } = await initSession()
+
+    // tools/list — a standard JSON-RPC request with an id
+    const res = await makeHttpRequest('post', serverUrl, {
+      jsonrpc: '2.0',
+      id: 999,
+      method: 'tools/list',
+      params: {}
+    }, {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      'mcp-session-id': sid
+    })
+    assert.equal(res.status, 200)
+    assert.equal(
+      res.headers['content-type'], 'application/json; charset=utf-8',
+      'JSON-RPC responses must use application/json for broad client compatibility'
+    )
+
+    // ping — simplest JSON-RPC method
+    const pingRes = await makeHttpRequest('post', serverUrl, {
+      jsonrpc: '2.0',
+      id: 998,
+      method: 'ping'
+    }, {
+      'Content-Type': 'application/json',
+      'mcp-session-id': sid
+    })
+    assert.equal(pingRes.headers['content-type'], 'application/json; charset=utf-8')
   })
 
   test('tools/list exposes the unified tool set and not the removed legacy tools', { timeout: 30000 }, async (t) => {
@@ -548,6 +644,87 @@ describe('MCP server integration (live app + in-process SSH server)', () => {
     assert.ok(/MCP Tasks extension/.test(noCaps.result.content[0].text))
 
     await callTool(sid, 'close_electerm_tab', { tabId })
+  })
+
+  test('MCP tab status: from tag, running/waiting/done lifecycle, auto-clear', { timeout: 180000 }, async (t) => {
+    if (skipOffline(t)) return
+    const { sid } = await initSession()
+
+    const opened = toolPayload(await callTool(sid, 'open_electerm_local_terminal', {}))
+    assert.equal(opened.success, true)
+    const tabId = opened.tabId
+    openedTabIds.push(tabId)
+    await waitForTerminalReady(sid, tabId)
+
+    const findTab = async () => {
+      const tabs = toolPayload(await callTool(sid, 'list_electerm_tabs', {}))
+      return tabs.find(tb => tb.id === tabId)
+    }
+
+    try {
+      // MCP-opened tabs carry from:"mcp" — the data source for the [mcp]
+      // prefix the tab title renders (create-title.jsx). The computed title
+      // itself is UI-side and not exposed through list_tabs.
+      let tab = await findTab()
+      assert.ok(tab, 'opened tab must be listed')
+      assert.equal(tab.from, 'mcp', 'MCP-opened tab must expose from:"mcp"')
+
+      // send → [running] appears (auto-clears after ~15s if never waited on)
+      await callTool(sid, 'send_electerm_terminal_command', {
+        command: 'sleep 2',
+        tabId
+      })
+      tab = await findTab()
+      assert.equal(tab.mcpStatus, 'running', 'send must set [running]')
+
+      // wait_for_terminal_idle → [waiting] while pending, [done] after
+      let sawWaiting = false
+      const waitPromise = callTool(sid, 'wait_for_electerm_terminal_idle', {
+        tabId, timeout: 30000, minWait: 4000, lines: 20
+      }).catch(err => { throw new Error(`wait_for_terminal_idle failed: ${err.message}`) })
+      const waitDeadline = Date.now() + 8000
+      while (Date.now() < waitDeadline) {
+        tab = await findTab()
+        if (tab && tab.mcpStatus === 'waiting') {
+          sawWaiting = true
+          break
+        }
+        await sleep(300)
+      }
+      assert.ok(sawWaiting, 'expected [waiting] while wait_for_terminal_idle is pending')
+      const idle = toolPayload(await waitPromise)
+      assert.equal(idle.timedOut, false)
+
+      // [done] shows right after and auto-clears within ~6s
+      tab = await findTab()
+      assert.equal(tab.mcpStatus, 'done', 'wait must end with [done]')
+      await sleep(7500)
+      tab = await findTab()
+      assert.equal(tab.mcpStatus || '', '', '[done] must auto-clear')
+
+      // execute → [running] while pending, [done] after completion
+      let sawRunning = false
+      const execPromise = callTool(sid, 'execute_electerm_command', {
+        command: `sleep 2 && echo "MCP_IT_STATUS_${uid}"`,
+        tabId
+      })
+      const execDeadline = Date.now() + 8000
+      while (Date.now() < execDeadline) {
+        tab = await findTab()
+        if (tab && tab.mcpStatus === 'running') {
+          sawRunning = true
+          break
+        }
+        await sleep(300)
+      }
+      assert.ok(sawRunning, 'expected [running] while execute_electerm_command is pending')
+      const exec = toolPayload(await execPromise)
+      assert.equal(exec.exitCode, 0)
+      tab = await findTab()
+      assert.equal(tab.mcpStatus, 'done', 'execute must end with [done]')
+    } finally {
+      await callTool(sid, 'close_electerm_tab', { tabId })
+    }
   })
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -898,6 +1075,62 @@ describe('MCP server integration (live app + in-process SSH server)', () => {
         res.error || (res.result && res.result.isError),
         `${tool} with ${JSON.stringify(args)} must error`
       )
+    }
+  })
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // 7. Error path: [error] status after the SSH connection drops
+  // ─────────────────────────────────────────────────────────────────────────
+
+  test('MCP tab status: [error] after the SSH connection drops', { timeout: 120000 }, async (t) => {
+    if (skipOffline(t)) return
+    const { sid } = await initSession()
+
+    const opened = toolPayload(await callTool(sid, 'open_electerm_tab_ssh', {
+      title: `MCP_IT_SSH_ERR_${uid}`,
+      host: '127.0.0.1',
+      port: TEST_PORT,
+      username: TEST_USERNAME,
+      password: TEST_PASSWORD
+    }))
+    assert.equal(opened.success, true)
+    const tabId = opened.tabId
+    openedTabIds.push(tabId)
+    await waitForTerminalReady(sid, tabId)
+
+    const findTab = async () => {
+      const tabs = toolPayload(await callTool(sid, 'list_electerm_tabs', {}))
+      return tabs.find(tb => tb.id === tabId)
+    }
+
+    try {
+      // Kill the in-process SSH server and end the tab's live connection.
+      // The renderer's exec path fails immediately ("socket is closed") and
+      // the handler must surface [error] on the tab.
+      await stopTestSshServer(sshServer)
+      sshServer = null
+
+      const res = await callTool(sid, 'execute_electerm_command', {
+        command: 'echo never-runs',
+        tabId
+      })
+      assert.equal(res.result.isError, true, 'execute on a dead connection must error')
+
+      let tab = await findTab()
+      assert.equal(tab.mcpStatus, 'error', 'failed execute must set [error]')
+      await sleep(7500)
+      tab = await findTab()
+      assert.equal(tab.mcpStatus || '', '', '[error] must auto-clear')
+    } finally {
+      await callTool(sid, 'close_electerm_tab', { tabId })
+      // Bring the shared server back so later tests / reruns still work
+      for (let i = 0; i < 5 && !sshServer; i++) {
+        try {
+          sshServer = await startTestSshServer({ port: TEST_PORT, rootDir: sftpRoot })
+        } catch (_) {
+          await sleep(500)
+        }
+      }
     }
   })
 })
