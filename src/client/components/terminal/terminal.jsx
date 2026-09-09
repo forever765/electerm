@@ -75,6 +75,10 @@ import {
   handleTerminalColorQuery,
   blendSelectionOverBackground
 } from './terminal-color-query.mjs'
+import {
+  createSingleFlight,
+  refreshTerminalAfterWindowFocus
+} from './terminal-render-recovery.mjs'
 
 const e = window.translate
 
@@ -205,6 +209,8 @@ class Term extends Component {
 
   componentWillUnmount () {
     refs.remove(this.id)
+    window.cancelAnimationFrame(this.timers.focusRefreshRaf)
+    this.timers.focusRefreshRaf = null
     clearTimeout(this.longPressTimer)
     this.longPressTimer = null
     this.touchStartPos = null
@@ -395,6 +401,23 @@ class Term extends Component {
     window.store.triggerResize()
     this.setState({ fontSizeChanged: false })
     term.focus()
+  }
+
+  onWindowFocus = () => {
+    if (!this.term || this.onClose) {
+      return
+    }
+    refreshTerminalAfterWindowFocus(this.term)
+    window.cancelAnimationFrame(this.timers.focusRefreshRaf)
+    this.timers.focusRefreshRaf = window.requestAnimationFrame(() => {
+      this.timers.focusRefreshRaf = null
+      this.fitAndRefresh()
+    })
+    clearTimeout(this.timers.focusRefresh)
+    this.timers.focusRefresh = setTimeout(() => {
+      this.timers.focusRefresh = null
+      this.fitAndRefresh()
+    }, 300)
   }
 
   isActiveTerminal = () => {
@@ -1365,7 +1388,11 @@ class Term extends Component {
     }
   }
 
-  reloadWebglRenderer = (reason = 'reload') => {
+  reloadWebglRenderer = createSingleFlight((reason = 'reload') => {
+    return this.reloadWebglRendererImpl(reason)
+  })
+
+  reloadWebglRendererImpl = (reason = 'reload') => {
     console.warn(`webgl renderer ${reason}, rebuilding`)
     try {
       this.webglContextLossDisposable?.dispose?.()
