@@ -1,6 +1,6 @@
 {
   "name": "electerm",
-  "version": "5.3.27",
+  "version": "5.5.7",
   "description": "Terminal/ssh/telnet/serialport/sftp client(linux, mac, win)",
   "main": "app.js",
   "bin": "npm/electerm",
@@ -22,10 +22,11 @@
     "test": "npm run test1 && npm run test2",
     "test-unit-ci": "node --test src/test/unit-ci/*.spec.js",
     "test-integration": "node --test src/test/integration/*.spec.js",
-    "test1": "./node_modules/.bin/playwright test src/test/e2e/00*.js --workers=1",
+    "test1": "./node_modules/.bin/playwright test src/test/e2e/00*.js --workers=1 --workers=1",
     "test2": "./node_modules/.bin/playwright test src/test/e2e/01*.js --workers=1",
     "test3": "./node_modules/.bin/playwright test src/test/e2e/02*.js --workers=1 && npm run test-unit-ci",
     "test4": "./node_modules/.bin/playwright test src/test/e2e/03*.js --workers=1",
+    "clean-test-server": "node build/bin/clean-test-server-home.js",
     "b": "npm run clean && npm run compile && npm run prepare-file",
     "r": "./build/bin/release",
     "w": "./build/bin/web-release",
@@ -67,6 +68,7 @@
     "@xterm/addon-image": "0.10.0-beta.292",
     "@xterm/addon-ligatures": "0.11.0-beta.292",
     "@xterm/addon-search": "0.17.0-beta.292",
+    "@xterm/addon-serialize": "0.15.0-beta.292",
     "@xterm/addon-unicode11": "0.10.0-beta.292",
     "@xterm/addon-web-links": "0.13.0-beta.292",
     "@xterm/addon-webgl": "0.20.0-beta.291",
@@ -99,7 +101,7 @@
     "vite": "8.1.0"
   },
   "dependencies": {
-    "@electerm/electerm-locales": "^2.3.13",
+    "@electerm/electerm-locales": "^2.3.18",
     "@electerm/electerm-themes": "^1.0.1",
     "@electerm/ftp-srv": "1.0.5",
     "@electerm/nedb": "2.0.0",
@@ -157,5 +159,9 @@
       "requestAnimationFrame",
       "self"
     ]
+  },
+  "allowScripts": {
+    "@serialport/bindings-cpp@13.0.0": true,
+    "node-pty@1.2.0-beta.15": true
   }
 }

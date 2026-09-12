@@ -11,6 +11,11 @@ const CURSOR_CSI_FINALS = new Set([
 ])
 const CURSOR_ESC_FINALS = new Set(['7', '8', 'D', 'E', 'M'])
 
+// Upper bound on output buffered while suppression is active (UTF-16 code
+// units). Past this the rest of the hidden output is dropped instead of
+// growing the buffer without limit.
+const MAX_SUPPRESSED_CHARS = 200000
+
 function ansiSequenceEnd (str, start) {
   const type = str[start + 1]
   if (!type) {
@@ -142,6 +147,7 @@ export default class AttachAddonCustom {
     this.isWindowsShell = isWindowsShell
     this.outputSuppressed = false
     this.suppressedData = []
+    this.suppressedChars = 0
     this.suppressTimeout = null
     this.onSuppressionEndCallback = null
     this.hasReceivedInitialData = false
@@ -152,6 +158,10 @@ export default class AttachAddonCustom {
     this.decoder = new TextDecoder('utf-8')
     this._lastDataTime = Date.now()
     this._lastInputTime = Date.now()
+    // Set for the lifetime of the connection; every async helper below
+    // bails out on it so a disposed addon can never leave a pending promise
+    // (and the startup queue waiting on it) hanging.
+    this.disposed = false
     this._keepaliveTimer = null
     this._keepaliveInterval = 3000
     this._lastOutputLine = ''
@@ -194,6 +204,16 @@ export default class AttachAddonCustom {
     this._maxBufferChars = 2 * 1024 * 1024
     this._droppedChars = 0
     this._droppedWarned = false
+    // Automation taps: subscribers receive the decoded string BEFORE write
+    // coalescing (see writeToTerminal). Suppressed output never reaches taps.
+    this._dataTaps = new Set()
+  }
+
+  addDataTap = (fn) => {
+    this._dataTaps.add(fn)
+    return () => {
+      this._dataTaps.delete(fn)
+    }
   }
 
   _initBase = async () => {
@@ -203,6 +223,10 @@ export default class AttachAddonCustom {
   }
 
   onInitialData = (callback) => {
+    if (this.disposed) {
+      // Never let a caller wait on a dead connection.
+      return
+    }
     if (this.hasReceivedInitialData) {
       callback()
     } else {
@@ -210,9 +234,72 @@ export default class AttachAddonCustom {
     }
   }
 
+  // Timestamp of the last chunk that arrived from the shell, updated even
+  // while output is suppressed. This is what "has the terminal gone quiet?"
+  // is measured against.
+  getLastOutputTime = () => {
+    return this._lastDataTime
+  }
+
+  /**
+   * Resolve once the shell has produced no output for `idleMs`.
+   * Used to pace queued startup work (shell integration injection, run
+   * scripts) so the next command is never typed into a shell that is still
+   * drawing the previous prompt - that race is what made run scripts get
+   * dropped when sftp path following was on.
+   * Never rejects and never hangs: resolves false on timeout or when the
+   * connection is gone.
+   */
+  waitForOutputIdle = ({ idleMs = 400, timeoutMs = 3000 } = {}) => {
+    if (this.disposed || !this.term) {
+      return Promise.resolve(false)
+    }
+    return new Promise((resolve) => {
+      let done = false
+      const finish = (result) => {
+        if (done) {
+          return
+        }
+        done = true
+        clearInterval(pollTimer)
+        clearTimeout(capTimer)
+        resolve(result)
+      }
+      const step = Math.max(50, Math.min(idleMs, 200))
+      const pollTimer = setInterval(() => {
+        if (this.disposed || !this.term) {
+          return finish(false)
+        }
+        if (Date.now() - this._lastDataTime >= idleMs) {
+          finish(true)
+        }
+      }, step)
+      const capTimer = setTimeout(() => finish(false), Math.max(idleMs, timeoutMs))
+    })
+  }
+
   startOutputSuppression = (timeout = 3000, onEnd = null, discardOnTimeout = false) => {
+    if (this.disposed) {
+      onEnd?.()
+      return
+    }
+    // A suppression may already be running (e.g. the 500ms keepalive one).
+    // Starting another must end it first - otherwise its timer stays armed
+    // and fires in the middle of the new window, ending it early and
+    // flushing half-collected output (the shell integration echo) to screen.
+    if (this.outputSuppressed) {
+      const previous = this.onSuppressionEndCallback
+      this.onSuppressionEndCallback = null
+      if (this.suppressTimeout) {
+        clearTimeout(this.suppressTimeout)
+        this.suppressTimeout = null
+      }
+      this.outputSuppressed = false
+      previous?.()
+    }
     this.outputSuppressed = true
     this.suppressedData = []
+    this.suppressedChars = 0
     this.onSuppressionEndCallback = onEnd
     this.suppressTimeout = setTimeout(() => {
       if (!discardOnTimeout) {
@@ -229,12 +316,14 @@ export default class AttachAddonCustom {
     }
     this.outputSuppressed = false
 
-    if (!discard && this.suppressedData.length > 0) {
-      for (const data of this.suppressedData) {
+    const pending = this.suppressedData
+    this.suppressedData = []
+    this.suppressedChars = 0
+    if (!discard && pending.length > 0 && this.term) {
+      for (const data of pending) {
         this.writeToTerminalDirect(data)
       }
     }
-    this.suppressedData = []
 
     if (this.onSuppressionEndCallback) {
       const callback = this.onSuppressionEndCallback
@@ -324,13 +413,13 @@ export default class AttachAddonCustom {
 
   writeToTerminalDirect = (data) => {
     const { term } = this
-    if (term.parent?.onZmodem) {
+    if (!term || term.parent?.onZmodem) {
       return
     }
     if (typeof data === 'string') {
       return term.write(data)
     }
-    term?.write(data)
+    term.write(data)
   }
 
   writeToTerminal = (data) => {
@@ -383,7 +472,12 @@ export default class AttachAddonCustom {
         this._enqueueWrite('\r\n' + str.slice(oscIdx))
         return
       }
-      this.suppressedData.push(data)
+      // Bounded: a slow login banner or a chatty MOTD during the injection
+      // window must not buffer without limit while output is hidden.
+      if (this.suppressedChars < MAX_SUPPRESSED_CHARS) {
+        this.suppressedChars += str.length
+        this.suppressedData.push(data)
+      }
       return
     }
 
@@ -400,6 +494,18 @@ export default class AttachAddonCustom {
 
     // Coalesce the actual write (see _enqueueWrite). notifyOnData /
     // onTerminalWrite fire once per flush instead of once per chunk.
+    // Automation taps run here on the decoded string, before coalescing
+    // (and after the suppression early-return above, so suppressed
+    // keepalive/shell-integration echo never triggers automations).
+    if (this._dataTaps.size) {
+      for (const fn of this._dataTaps) {
+        try {
+          fn(str)
+        } catch (e) {
+          console.error('[dataTap]', e)
+        }
+      }
+    }
     this._enqueueWrite(str)
   }
 
@@ -564,9 +670,18 @@ export default class AttachAddonCustom {
   }
 
   dispose = () => {
+    if (this.disposed) {
+      return
+    }
+    this.disposed = true
     this._stopKeepalive()
     clearTimeout(this._echoCheckTimer)
     this._echoCheckTimer = null
+    // End any pending suppression *before* dropping `term`, so the callback
+    // (and the promise the startup queue is awaiting) is released instead of
+    // hanging forever on a connection that is already gone.
+    this.stopOutputSuppression(true)
+    this.onInitialDataCallback = null
     if (this._flushTimer) {
       clearTimeout(this._flushTimer)
       this._flushTimer = null
@@ -574,6 +689,7 @@ export default class AttachAddonCustom {
     this._flushScheduled = false
     this._writeBuffer = []
     this._bufferChars = 0
+    this._dataTaps.clear()
     // Reset the streaming decoder so any partial multi-byte sequence held
     // over from this connection can not leak into a reused instance.
     this.decoder = new TextDecoder('utf-8')

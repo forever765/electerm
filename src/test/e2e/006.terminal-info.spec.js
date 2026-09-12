@@ -34,6 +34,7 @@ describe('info panel', function () {
     await delay(1000)
 
     await client.hasElem('.right-side-panel')
+    await client.hasElem('.right-side-panel .item-filter')
 
     let panelContent = await client.getText('.right-side-panel-content')
     expect(panelContent).includes(initialTabId)

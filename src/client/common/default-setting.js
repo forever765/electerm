@@ -58,6 +58,18 @@ export default {
     'network',
     'disks'
   ],
+  remoteMonitorBarEnabled: false,
+  remoteMonitorBarItems: [
+    'hostname',
+    'cpu',
+    'cpuHistory',
+    'memory',
+    'upload',
+    'download',
+    'uptime',
+    'users',
+    'disks'
+  ],
   filePropsEnabled: [
     'name',
     'size',
@@ -75,6 +87,7 @@ export default {
   sshSftpSplitView: false,
   showCmdSuggestions: false,
   autoReconnectTerminal: false,
+  restoreTerminalSessionOnReload: false,
   startDirectoryLocal: '',
   allowMultiInstance: false,
   disableDeveloperTool: false,
@@ -82,6 +95,7 @@ export default {
   switchTabOnHover: false,
   disableTabIndex: false,
   disableShortcutBar: false,
+  disableConfirmForLargeClipboardContent: false,
   leftSideBarIcons: [
     'newBookmark',
     'quickConnect',

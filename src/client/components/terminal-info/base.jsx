@@ -2,38 +2,16 @@
  * show base terminal info, id sessionID
  */
 import { Component } from 'react'
-import {
-  Button,
-  Dropdown
-} from 'antd'
+import ItemFilter from '../common/item-filter'
 import SwitchLabel from '../common/switch'
-import defaults from '../../common/default-setting'
+import { INFO_PANEL_ITEM_IDS } from '../remote-monitor/monitor-model'
 import { toggleTerminalLog, toggleTerminalLogTimestamp } from '../terminal/terminal-apis'
-import {
-  ClockCircleOutlined,
-  BorderlessTableOutlined,
-  DatabaseOutlined,
-  BarsOutlined,
-  ApiOutlined,
-  PartitionOutlined,
-  FilterOutlined,
-  CheckOutlined
-} from '@ant-design/icons'
 import { refs } from '../common/ref'
 import ShowItem from '../common/show-item'
 import { osResolve } from '../../common/resolve'
 import createDefaultLogPath from '../../common/default-log-path'
 
 const e = window.translate
-
-const mapper = {
-  uptime: <ClockCircleOutlined />,
-  cpu: <BorderlessTableOutlined />,
-  mem: <DatabaseOutlined />,
-  activities: <BarsOutlined />,
-  network: <ApiOutlined />,
-  disks: <PartitionOutlined />
-}
 
 export default class TerminalInfoBase extends Component {
   state = {
@@ -73,14 +51,14 @@ export default class TerminalInfoBase extends Component {
     })
   }
 
-  toggleTerminalLogInfo = (h) => {
-    const { terminalInfos } = this.props
-    const nv = terminalInfos.includes(h)
-      ? terminalInfos.filter(f => f !== h)
-      : [...terminalInfos, h]
-    window.store.setConfig({
-      terminalInfos: nv
-    })
+  handleToggleInfo = (id) => {
+    const selected = new Set(this.props.terminalInfos || [])
+    if (selected.has(id)) {
+      selected.delete(id)
+    } else {
+      selected.add(id)
+    }
+    window.store.setTerminalInfos(INFO_PANEL_ITEM_IDS.filter(x => selected.has(x)))
   }
 
   handleToggle = () => {
@@ -134,43 +112,13 @@ export default class TerminalInfoBase extends Component {
     )
   }
 
-  renderInfoSelection () {
-    const {
-      terminalInfos
-    } = this.props
-    const items = defaults.terminalInfos.map(f => {
-      const checked = terminalInfos.includes(f)
-      return {
-        key: f,
-        label: (
-          <span
-            className='term-info-filter-label'
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-          >
-            <span style={{ width: '14px' }}>{checked ? <CheckOutlined /> : null}</span>
-            {mapper[f]} {f}
-          </span>
-        ),
-        onClick: () => this.toggleTerminalLogInfo(f)
-      }
-    })
+  renderInfoFilter () {
     return (
-      <Dropdown
-        menu={{ items }}
-        trigger={['click']}
-        placement='bottomRight'
-      >
-        <Button
-          size='small'
-          icon={<FilterOutlined />}
-        >
-          {e('filter')}({terminalInfos.length}/{defaults.terminalInfos.length})
-        </Button>
-      </Dropdown>
+      <ItemFilter
+        ids={INFO_PANEL_ITEM_IDS}
+        onToggle={this.handleToggleInfo}
+        selected={this.props.terminalInfos || []}
+      />
     )
   }
 
@@ -209,9 +157,9 @@ export default class TerminalInfoBase extends Component {
               )
             : null
         }
-        <div className='pd2y'>
+        <div className='terminal-info-filter-wrap'>
           {
-            this.renderInfoSelection()
+            this.renderInfoFilter()
           }
         </div>
 

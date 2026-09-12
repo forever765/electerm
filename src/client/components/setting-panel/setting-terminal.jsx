@@ -571,12 +571,18 @@ export default class SettingTerminal extends Component {
             'rightClickSelectsWord',
             'pasteWhenContextMenu',
             'copyWhenSelect',
+            'disableConfirmForLargeClipboardContent',
             'ctrlOrMetaOpenTerminalLink',
             'sftpPathFollowSsh',
             'sshSftpSplitView',
             'showCmdSuggestions',
-            'autoReconnectTerminal'
+            'autoReconnectTerminal',
+            'restoreTerminalSessionOnReload'
           ].map(d => this.renderToggle(d))
+        }
+        {
+          // label differs from the config key
+          this.renderToggle('remoteMonitorBarEnabled', 'pd2b', e('monitorBar'))
         }
         <div className='pd1b'>{e('dragDropBehavior')}</div>
         <Select

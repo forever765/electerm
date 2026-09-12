@@ -1,5 +1,5 @@
 import { auto } from 'manate/react'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import Layout from '../layout/layout'
 import FileInfoModal from '../sftp/file-info-modal'
 import FileCompareModal from '../sftp/file-compare-modal'
@@ -10,7 +10,6 @@ import Sidebar from '../sidebar'
 import CssOverwrite from '../bg/css-overwrite'
 import UiTheme from './ui-theme'
 import CustomCss from '../bg/custom-css.jsx'
-import Resolutions from '../rdp/resolution-edit'
 import TerminalInteractive from '../terminal/terminal-interactive'
 import ConfirmModalStore from '../file-transfer/conflict-resolve.jsx'
 import TransferQueue from '../file-transfer/transfer-queue'
@@ -19,18 +18,21 @@ import TerminalCmdSuggestions from '../terminal/terminal-command-dropdown'
 import TransportsActionStore from '../file-transfer/transports-action-store.jsx'
 import classnames from 'classnames'
 import ShortcutControl from '../shortcuts/shortcut-control.jsx'
-import { isMac, isWin, textTerminalBgValue } from '../../common/constants'
+import {
+  footerHeight,
+  isMac,
+  isWin,
+  remoteMonitorBarHeight,
+  textTerminalBgValue
+} from '../../common/constants'
 import { isAIDisabled } from '../../common/ai-feature'
 import { ConfigProvider } from 'antd'
 import { NotificationContainer } from '../common/notification'
-import InfoModal from '../sidebar/info-modal.jsx'
 import RightSidePanel from '../side-panel-r/side-panel-r'
 import ConnectionHoppingWarning from './connection-hopping-warnning'
 import SshConfigLoadNotify from '../ssh-config/ssh-config-load-notify'
 import LoadSshConfigs from '../ssh-config/load-ssh-configs'
 import AIChat from '../ai/ai-chat-entry'
-import AIConfigModal from '../ai/ai-config-modal'
-import Opacity from '../common/opacity'
 import MoveItemModal from '../tree-list/move-item-modal'
 import InputContextMenu from '../common/input-context-menu'
 import WorkspaceSaveModal from '../tabs/workspace-save-modal'
@@ -44,8 +46,16 @@ import deepCopy from 'json-deep-copy'
 import './wrapper.styl'
 import TerminalInfo from '../terminal-info/terminal-info-entry'
 import ShortcutBarEntry from '../terminal/shortcut-bar-entry'
+import LazyBoundary from '../common/lazy-boundary'
+import { isRemoteMonitorBarVisible } from '../remote-monitor/visibility'
 import '../../common/fs.js'
 import './term-fullscreen.styl'
+
+const Resolutions = lazy(() => import('../rdp/resolution-edit'))
+const InfoModal = lazy(() => import('../sidebar/info-modal.jsx'))
+const AIConfigModal = lazy(() => import('../ai/ai-config-modal'))
+// window opacity is electron-only: lazy so the web app never loads the chunk
+const Opacity = lazy(() => import('../common/opacity'))
 
 export default auto(function Index (props) {
   useEffect(() => {
@@ -129,6 +139,7 @@ export default auto(function Index (props) {
     widgetInstances
   } = store
   const upgradeInfo = deepCopy(store.upgradeInfo)
+  const remoteMonitorBarVisible = isRemoteMonitorBarVisible(store)
   const cls = classnames({
     loaded: configLoaded,
     'not-webapp': !window.et.isWebApp,
@@ -147,12 +158,14 @@ export default auto(function Index (props) {
     'is-main': !isSecondInstance,
     'is-mobile': store.isMobile,
     'is-desktop': !store.isMobile,
-    'is-touch-device': store.isTouchDevice
+    'is-touch-device': store.isTouchDevice,
+    'remote-monitor-bar-on': remoteMonitorBarVisible
   })
   const ext1 = {
     className: cls,
     style: {
-      '--left-side-bar-width': store.leftSideBarWidth + 'px'
+      '--left-side-bar-width': store.leftSideBarWidth + 'px',
+      '--footer-stack-height': `${footerHeight + (remoteMonitorBarVisible ? remoteMonitorBarHeight : 0)}px`
     }
   }
   // Get active tab IDs
@@ -242,20 +255,6 @@ export default auto(function Index (props) {
     title: rightPanelTitle,
     rightPanelTab
   }
-  const terminalInfoProps = {
-    rightPanelTab,
-    ...deepCopy(store.terminalInfoProps),
-    ...pick(
-      config,
-      [
-        'host',
-        'port',
-        'saveTerminalLogToFile',
-        'terminalInfos',
-        'sessionLogPath'
-      ]
-    )
-  }
   const sshConfigProps = {
     ...pick(store, [
       'settingTab',
@@ -293,13 +292,23 @@ export default auto(function Index (props) {
           {...confsCss}
           configLoaded={configLoaded}
         />
-        <Opacity opacity={config.opacity} />
+        {window.et.isWebApp
+          ? null
+          : (
+            <LazyBoundary>
+              <Suspense fallback={null}>
+                <Opacity opacity={config.opacity} />
+              </Suspense>
+            </LazyBoundary>
+            )}
         <TerminalInteractive />
         <UiTheme
           {...themeProps}
         />
         <CustomCss customCss={config.customCss} configLoaded={configLoaded} />
-        <TextEditor />
+        {store.textEditorRequested && (
+          <TextEditor />
+        )}
         <UpdateCheck
           skipVersion={config.skipVersion}
           upgradeInfo={upgradeInfo}
@@ -325,11 +334,23 @@ export default auto(function Index (props) {
           config={config}
         />
         <Remote2RemoteHandlers />
-        <Resolutions {...resProps} />
-        <InfoModal {...infoModalProps} />
+        {openResolutionEdit && (
+          <LazyBoundary>
+            <Suspense fallback={null}>
+              <Resolutions {...resProps} />
+            </Suspense>
+          </LazyBoundary>
+        )}
+        {store.showInfoModal && (
+          <LazyBoundary>
+            <Suspense fallback={null}>
+              <InfoModal {...infoModalProps} />
+            </Suspense>
+          </LazyBoundary>
+        )}
         <RightSidePanel {...rightPanelProps}>
           {!isAIDisabled() && <AIChat {...aiChatProps} />}
-          <TerminalInfo key={store.activeTabId} {...terminalInfoProps} />
+          <TerminalInfo key={store.activeTabId} store={store} {...deepCopy(store.terminalInfoProps)} />
         </RightSidePanel>
         <SshConfigLoadNotify {...sshConfigProps} />
         <LoadSshConfigs
@@ -346,7 +367,13 @@ export default auto(function Index (props) {
         <BatchOpRunner />
         <ImportProgress />
         <ShortcutBarEntry store={store} />
-        {!isAIDisabled() && <AIConfigModal store={store} />}
+        {!isAIDisabled() && store.showAIConfigModal && (
+          <LazyBoundary>
+            <Suspense fallback={null}>
+              <AIConfigModal store={store} />
+            </Suspense>
+          </LazyBoundary>
+        )}
         <UnixTimestampTooltip />
       </div>
     </ConfigProvider>

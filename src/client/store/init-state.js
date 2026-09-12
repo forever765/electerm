@@ -167,6 +167,10 @@ export default () => {
     pinnedQuickCommandBar: ls.getItem(pinnedQuickCommandBarKey) === 'y',
     qmSortByFrequency: ls.getItem(qmSortByFrequencyKey) === 'yes',
 
+    // declarative auto triggers (global; bookmark/session ones live on the tab)
+    triggers: [],
+    triggerSessionOpen: false,
+
     // touch-only shortcut bar (see components/terminal/shortcut-bar-entry.jsx)
     shortcutBarVisible: false,
     // px the bar is lifted above a page-overlaying system input panel
@@ -189,6 +193,9 @@ export default () => {
 
     // editor
     showEditor: false,
+    // set to true to mount the text editor component,
+    // so its code is only loaded when user really needs it
+    textEditorRequested: false,
 
     // file/info modal
     showFileModal: false,

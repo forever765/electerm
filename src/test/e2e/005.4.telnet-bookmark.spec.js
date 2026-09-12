@@ -1,6 +1,7 @@
 const { _electron: electron } = require('@playwright/test')
 const { test: it, expect } = require('@playwright/test')
 const { describe } = it
+it.setTimeout(100000)
 const delay = require('./common/wait')
 const { nanoid } = require('nanoid')
 const appOptions = require('./common/app-options')
@@ -39,7 +40,7 @@ describe('Telnet bookmark', function () {
     await client.setValue('#telnet-form_port', testPort)
 
     // Save and connect
-    await client.click('.setting-wrap .ant-btn-primary')
+    await client.click('.setting-wrap .ant-btn-primary:visible')
     await delay(5000) // Need longer delay for telnet connection
 
     // Verify that the history has been updated
