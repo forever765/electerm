@@ -24,9 +24,13 @@
  * 4. `allowMultiInstance` pre-seeded in the isolated config. The developer may
  *    already run electerm, and the default single-instance path would forward
  *    our launch to that app and quit. This changes the test's own throwaway
- *    config only -- the app's single-instance logic is untouched. It does NOT
- *    solve port contention with a running instance; that is a production
- *    concern and a separate investigation.
+ *    config only -- the app's single-instance logic is untouched. With that
+ *    forwarding out of the way, the inherited instance credentials
+ *    (electermPort / electermHost / tokenElecterm) are dropped from the launch
+ *    env so the app's own backend picks a free port and generates its own
+ *    token, instead of being pointed at the developer's running instance.
+ *    That env cleanup is what the preflight verified; it is not a change to
+ *    src/app/server/child-process.js.
  *
  * Everything else comes from ./app-options-webgl.js, which is itself
  * ./app-options.js minus --disable-gpu. Do not re-list launch arguments here:
@@ -43,6 +47,14 @@ const defaultUserName = require('../../../app/common/default-user-name')
 
 const ROOT_PREFIX = 'electerm-webgl-e2e-'
 const ownedRoots = new Set()
+
+// 后端子进程的启动环境由 child-process.js 决定，必须由它自己生成；
+// 从父环境继承来的实例凭据会让测试连到别人的服务。
+const INHERITED_INSTANCE_ENV_KEYS = [
+  'electermPort',
+  'electermHost',
+  'tokenElecterm'
+]
 
 /**
  * Seed the isolated database with the app's own no-encrypt config row.
@@ -79,13 +91,23 @@ function createWebglLaunchOptions () {
   mkdirSync(profilePath, { recursive: true })
   seedIsolatedData(dataPath)
 
+  // 父进程可能正运行 electerm（或从它继承环境），从而导出下面这三个变量。
+  // 后端由 src/app/server/child-process.js 以 Object.assign(默认值, cleanEnv)
+  // 组装环境，父 env 里的值会压过它自己选好的端口和 token：测试会去连开发者
+  // 实例的 127.0.0.1:30975（EADDRINUSE）或用错 token 导致前端鉴权失败。
+  // 只删除本次 launch 的 env 副本，base.env 保持原样（其他测试/E2E 不受影响）。
+  const env = {
+    ...base.env,
+    // Overrides any DATA_PATH inherited from the developer's shell, which
+    // would otherwise point the app straight back at their real data.
+    DATA_PATH: dataPath
+  }
+  for (const key of INHERITED_INSTANCE_ENV_KEYS) {
+    delete env[key]
+  }
+
   return {
-    env: {
-      ...base.env,
-      // Overrides any DATA_PATH inherited from the developer's shell, which
-      // would otherwise point the app straight back at their real data.
-      DATA_PATH: dataPath
-    },
+    env,
     args: [
       ...base.args.filter(arg => !arg.startsWith('--user-data-dir=')),
       `--user-data-dir=${profilePath}`

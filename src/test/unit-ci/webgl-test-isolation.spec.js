@@ -1,5 +1,6 @@
 const { describe, it, after } = require('node:test')
 const assert = require('node:assert/strict')
+const { execFileSync } = require('node:child_process')
 const { mkdtempSync, rmSync, existsSync } = require('node:fs')
 const { DatabaseSync } = require('node:sqlite')
 const { tmpdir } = require('node:os')
@@ -149,5 +150,63 @@ describe('cleanupWebglLaunchOptions', () => {
     assert.equal(existsSync(root), false)
     // Idempotent: a second call has nothing left to own.
     assert.equal(iso.cleanupWebglLaunchOptions(options), false)
+  })
+})
+
+// 父进程（例如正在运行 electerm 的开发机 / 继承了它环境的 CI shell）可能已导出
+// electermPort、electermHost、tokenElecterm。src/app/server/child-process.js
+// 用 Object.assign(默认值, cleanEnv) 组装后端子进程环境，cleanEnv 会覆盖它自己的
+// 默认值，于是测试启动的应用会去连开发者实例的端口（EADDRINUSE）或拿错 token。
+// factory 必须在每次 launch 的 env 副本里删掉这三个键，同时不改动 base.env。
+describe('inherited instance credentials', () => {
+  const KEYS = ['electermPort', 'electermHost', 'tokenElecterm']
+
+  // 真实链路必须在“父环境已带这三个变量”时加载，才能证明快照后的 base.env 里
+  // 确实有它们；用子进程模拟，输出只含布尔值，不打印 token 值。
+  function readFactoryWithInheritedEnv (inherited) {
+    const script = `
+      const iso = require('./src/test/e2e/common/webgl-test-isolation')
+      const base = require('./src/test/e2e/common/app-options-webgl')
+      const keys = ${JSON.stringify(KEYS)}
+      const present = o => keys.filter(k => Object.prototype.hasOwnProperty.call(o, k))
+      const parentHas = keys.filter(k => process.env[k] !== undefined)
+      const first = iso.createWebglLaunchOptions()
+      const second = iso.createWebglLaunchOptions()
+      const result = {
+        parentHas,
+        baseHas: present(base.env),
+        baseMatchesParent: keys.filter(k => base.env[k] === process.env[k]),
+        launchHas: present(first.env),
+        secondLaunchHas: present(second.env)
+      }
+      iso.cleanupWebglLaunchOptions(first)
+      iso.cleanupWebglLaunchOptions(second)
+      process.stdout.write(JSON.stringify(result))
+    `
+    const env = { ...process.env, ...inherited }
+    const out = execFileSync(process.execPath, ['-e', script], {
+      cwd: resolve(__dirname, '../../..'),
+      env,
+      encoding: 'utf8'
+    })
+    return JSON.parse(out)
+  }
+
+  it('strips electermPort/electermHost/tokenElecterm from the launch env only', () => {
+    const inherited = {
+      electermPort: '39876',
+      electermHost: '127.0.0.1',
+      tokenElecterm: 'inherited-placeholder-token'
+    }
+    const result = readFactoryWithInheritedEnv(inherited)
+
+    // 前置：模拟的父环境确实带有这三个变量，base 快照也继承到了原值。
+    assert.deepEqual(result.parentHas, KEYS)
+    assert.deepEqual(result.baseHas, KEYS)
+    assert.deepEqual(result.baseMatchesParent, KEYS)
+
+    // 修复点：每次 launch 的 env 都不再带它们。
+    assert.deepEqual(result.launchHas, [])
+    assert.deepEqual(result.secondLaunchHas, [])
   })
 })
