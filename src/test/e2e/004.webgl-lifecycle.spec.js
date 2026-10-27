@@ -17,22 +17,42 @@
  *
  * Opt-in only: it needs a real GPU-backed WebGL2 context and a real window, so
  * it runs only with LOCAL_WEBGL_TEST=1 on macOS. Everywhere else — CI included
- * — it must SKIP, never fail. Run it with:
+ * — it must SKIP, never fail.
  *
- *   npm run compile
+ * Run it from the repository root, on a build of work/app:
+ *
+ *   # once, if playwright/electron are not installed yet. The registry prefix
+ *   # matters: the default mirror here does not carry every pinned dependency.
+ *   npm_config_registry=https://registry.npmjs.org \
+ *     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm run prepare-test
+ *   npm run b     # clean + vite build + prepare work/app
+ *   npm run pb    # electron build prep
  *   LOCAL_WEBGL_TEST=1 npx playwright test \
  *     src/test/e2e/004.webgl-lifecycle.spec.js --workers=1
  *
- * NOTE: this file has never been executed against a live Electron window. The
- * lifecycle ordering it asserts — and the errata recorded against that ordering
- * — live in the design doc that ships with this branch:
- * docs/superpowers/specs/2026-09-18-webgl-visible-lifecycle-design.md §13.7.
- * Everything below is written to fail loudly (never silently pass) when its
- * premise does not hold, but it is unverified at runtime.
+ * Both launches go through ./common/webgl-test-isolation.js, which gives each
+ * of them its own throwaway root: DATA_PATH (electerm's own config, history
+ * and database) and --user-data-dir (Chromium's profile) both live inside a
+ * fresh temp dir and are removed once that app has closed. A run therefore
+ * never reads or writes the developer's real electerm data, and the two tests
+ * sharing one worker never share a profile or a database.
+ *
+ * NOTE: this file has never been executed against a live Electron window. Both
+ * local attempts so far were blocked before the window appeared: the app could
+ * not start its local backend while the developer's own electerm held
+ * 127.0.0.1:30975, so none of the renderer assertions below has run yet. The
+ * lifecycle ordering they assert — and the errata recorded against that
+ * ordering — were reviewed against the lifecycle design, and the order
+ * asserted below is the one the implementation produces (see the loss-episode
+ * comment). Everything here is written to fail loudly (never silently pass)
+ * when its premise does not hold, but it is unverified at runtime.
  */
 const { _electron: electron, test, expect } = require('@playwright/test')
 const delay = require('./common/wait')
-const appOptions = require('./common/app-options-webgl')
+const {
+  createWebglLaunchOptions,
+  cleanupWebglLaunchOptions
+} = require('./common/webgl-test-isolation')
 
 const enabled = process.env.LOCAL_WEBGL_TEST === '1' && process.platform === 'darwin'
 test.skip(!enabled, 'requires a local macOS GPU/WebGL (set LOCAL_WEBGL_TEST=1)')
@@ -372,6 +392,10 @@ async function restoreRendererType (page, rendererType) {
 }
 
 test('keeps WebGL only on visible terminals and releases it when a terminal is hidden', async () => {
+  // One private data root and profile per launch, not per module load: the
+  // second test in this worker must never inherit this run's database, its
+  // chunk cache, or a profile a failed close left behind.
+  const appOptions = createWebglLaunchOptions()
   const app = await electron.launch(appOptions)
   let page = null
   let originalRendererType = null
@@ -595,21 +619,19 @@ test('keeps WebGL only on visible terminals and releases it when a terminal is h
 
     // Loss episode order. This asserts the order the implementation actually
     // produces — `context-lost` -> `renderer-dispose` -> `dom-fallback-activated`
-    // -> `webgl-circuit-tripped` — and deliberately NOT the order listed in the
-    // plan's spec 13.7 (`... webgl-circuit-tripped -> renderer-dispose ->
-    // dom-fallback-activated`), which was a design sketch and has since been
-    // ruled superseded by the plan owner.
+    // -> `webgl-circuit-tripped` — and deliberately NOT an earlier design
+    // sketch (`... webgl-circuit-tripped -> renderer-dispose ->
+    // dom-fallback-activated`), which the lifecycle design superseded.
     //
-    // Do not "fix" this assertion back to the 13.7 order, and do not move the
-    // trip earlier in mixins/term-theme.js to match it. fallback(...,
+    // Do not "fix" this assertion back to the sketch's order, and do not move
+    // the trip earlier in mixins/term-theme.js to match it. fallback(...,
     // { releaseContext: false }) must complete first: the breaker broadcasts
     // synchronously, so tripping earlier triggers this very terminal's own
     // circuit subscription (terminal.jsx subscribeWebglCircuit) ->
     // reconcileRenderer('circuit tripped') -> target becomes domFallback ->
     // deactivateTo(..., releaseContext: true) -> loseContext() on an already
     // lost context, which is exactly what releaseContext: false exists to
-    // avoid. See the §13.7 errata in
-    // docs/superpowers/specs/2026-09-18-webgl-visible-lifecycle-design.md.
+    // avoid.
     const episode = sortedRecords(records).filter(r => r.seq > watermark)
     const lostSeq = firstSeqAfter(episode, 'context-lost')
     expect(
@@ -683,19 +705,30 @@ test('keeps WebGL only on visible terminals and releases it when a terminal is h
       { timeout: STEP.text, describe: text => JSON.stringify((text || '').slice(-400)) }
     )
   } finally {
-    // Restore first, and inside `finally`: leaving rendererType at 'webGL'
-    // would write it into the developer's real config and make this spec's own
-    // precondition (the app must start in DOM mode) fail on the next run.
+    // Restore first, and inside `finally`, so the lifecycle converges on the
+    // original renderer before shutdown instead of being torn down mid-switch.
+    // (The data root is throwaway, so this is about a clean teardown, not
+    // about protecting a developer's config.)
     if (page && originalRendererType !== null) {
       await restoreRendererType(page, originalRendererType).catch(() => {})
     }
     // Always tear the app down, including on assertion failure, so a failing
-    // run cannot leave a zombie Electron behind.
-    await app.close().catch(() => {})
+    // run cannot leave a zombie Electron behind. The private data root is only
+    // removed once the app that owns it has actually exited; a failed close
+    // leaves it in place for inspection rather than deleting files a live app
+    // still has open.
+    await app.close()
+      .then(() => cleanupWebglLaunchOptions(appOptions))
+      .catch(() => {})
   }
 })
 
 test('falls back to DOM when the webgl addon can not be loaded, without tripping the breaker', async () => {
+  // Same factory as the test above: a separate data root and profile keep the
+  // first test's addon chunk out of this one's module cache and keep its
+  // database from leaking in. This also holds when the first app's close failed
+  // and its profile is still locked.
+  const appOptions = createWebglLaunchOptions()
   const app = await electron.launch(appOptions)
   let page = null
   let originalRendererType = null
@@ -708,16 +741,14 @@ test('falls back to DOM when the webgl addon can not be loaded, without tripping
     // the same failure a broken chunk fetch produces. This must be installed
     // before anything asks for the chunk, hence before the renderer switch.
     //
-    // Pinned to the addon chunk with a regex, NOT a `**/*webgl*` glob: the
-    // diagnostics build id (`webgl-visible-only-1-<sha>`) is embedded in *every*
-    // emitted asset name — the entry script (`js/basic-webgl-visible-only-1-….js`),
-    // the stylesheet (`css/style-webgl-visible-only-1-….css`) and all 238 files in
-    // the chunk directory — while Playwright globs only require the *last* path
-    // segment to match. A glob would therefore abort the entry script too, the app
-    // would never boot, and `waitForTerminal` would time out instead of exercising
-    // the failed-activation path. `chunk/addon-webgl-<buildId>-<hash>.js` is the
-    // one and only asset with that prefix (verified against the built output), so
-    // this rule cannot hit an entry script, a stylesheet, or any other chunk.
+    // Pinned to the addon chunk with a regex, NOT a `**/*webgl*` glob: Playwright
+    // globs only require the *last* path segment to match, so any build whose
+    // entry script or stylesheet name happens to contain "webgl" (a webgl-named
+    // build id does exactly that) would be aborted too — the app would never
+    // boot, and `waitForTerminal` would time out instead of exercising the
+    // failed-activation path. On the current build the only match is
+    // `chunk/addon-webgl-<version>-<hash>.js` (verified against work/app/assets),
+    // so this rule cannot hit an entry script, a stylesheet, or any other chunk.
     const abortedRequests = []
     await page.route(/\/chunk\/addon-webgl-/, route => {
       abortedRequests.push(route.request().url())
@@ -824,6 +855,8 @@ test('falls back to DOM when the webgl addon can not be loaded, without tripping
     if (page && originalRendererType !== null) {
       await restoreRendererType(page, originalRendererType).catch(() => {})
     }
-    await app.close().catch(() => {})
+    await app.close()
+      .then(() => cleanupWebglLaunchOptions(appOptions))
+      .catch(() => {})
   }
 })

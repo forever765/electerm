@@ -4,12 +4,17 @@ const { execFileSync } = require('node:child_process')
 const { resolve } = require('node:path')
 
 // The opt-in WebGL E2E (src/test/e2e/004.webgl-lifecycle.spec.js) must launch
-// with the same isolation every other E2E gets from ./app-options.js -- a fresh
-// user-data dir, NODE_TEST, and the explicit sandbox opt-out -- while keeping
+// with the same upstream plumbing every other E2E gets from ./app-options.js --
+// a user-data dir, NODE_TEST, and the explicit sandbox opt-out -- while keeping
 // the GPU enabled. A helper that re-lists the arguments by hand drifts silently:
-// it was written when app-options.js had no user-data-dir, so it launched
-// against the developer's real ~/Library/Application Support/electerm and could
-// exercise a stale cached bundle. Pin the inheritance contract instead.
+// it was written when app-options.js had no user-data-dir. Pin the inheritance
+// contract instead.
+//
+// Scope: this file covers what the helper inherits from app-options.js. It says
+// nothing about per-launch isolation -- app-options creates its user-data dir
+// once per module load, so two launches in one worker share it. The E2E itself
+// goes through ./common/webgl-test-isolation.js for one data root and profile
+// per launch; that is pinned by webgl-test-isolation.spec.js.
 
 const root = resolve(__dirname, '../../..')
 const HELPER = './src/test/e2e/common/app-options-webgl'
@@ -17,7 +22,7 @@ const HELPER = './src/test/e2e/common/app-options-webgl'
 // Each child process requires the real helper and prints what it exported. The
 // helper is required in a child (not here) so the launch-time env snapshot and
 // the freshly created user-data dir are read exactly as Electron would see
-// them, and so a second run gets a second temp dir.
+// them, and so a second process gets a second temp dir.
 function readOptions (envOverrides = {}) {
   const script = `
     const base = require('./src/test/e2e/common/app-options')
@@ -28,11 +33,17 @@ function readOptions (envOverrides = {}) {
     }))
   `
   const env = { ...process.env, ...envOverrides }
-  if (!('ELECTERM_E2E_NO_SANDBOX' in envOverrides)) {
-    delete env.ELECTERM_E2E_NO_SANDBOX
-  }
-  if (!('ELECTERM_E2E_USER_DATA' in envOverrides)) {
-    delete env.ELECTERM_E2E_USER_DATA
+  // Clear every value app-options.js reads from the environment (plus the
+  // sandbox variable it copies through ...process.env), so the defaults
+  // asserted below are the helper's, not this machine's.
+  for (const key of [
+    'ELECTERM_E2E_NO_SANDBOX',
+    'ELECTERM_E2E_USER_DATA',
+    'ELECTRON_DISABLE_SANDBOX'
+  ]) {
+    if (!(key in envOverrides)) {
+      delete env[key]
+    }
   }
   const out = execFileSync(process.execPath, ['-e', script], {
     cwd: root,
@@ -62,20 +73,22 @@ describe('app-options-webgl', () => {
     assert.equal(webgl.args.includes('--disable-dev-shm-usage'), true)
   })
 
-  it('keeps the isolated user-data dir from app-options', () => {
+  it('keeps the user-data dir inherited from app-options', () => {
     const first = readOptions()
     const second = readOptions()
 
     const dir = userDataDirArg(first.webgl.args)
-    assert.ok(dir, 'the WebGL launch must inherit --user-data-dir')
+    assert.ok(dir, 'the WebGL helper must inherit --user-data-dir')
     assert.equal(dir, userDataDirArg(first.base.args))
     assert.match(dir, /--user-data-dir=.+electerm-e2e-/)
 
-    // Not a hardcoded path shared across launches: each launch gets its own.
+    // Not a hardcoded path: a separate module load (here: a separate process)
+    // mints a separate dir. Per-launch isolation is a different contract, owned
+    // by webgl-test-isolation.spec.js.
     assert.notEqual(
       userDataDirArg(second.webgl.args),
       dir,
-      'each launch must get a fresh isolated user-data dir'
+      'a separate module load must mint a fresh user-data dir'
     )
   })
 

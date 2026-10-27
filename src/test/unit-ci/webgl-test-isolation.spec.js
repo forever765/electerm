@@ -1,0 +1,153 @@
+const { describe, it, after } = require('node:test')
+const assert = require('node:assert/strict')
+const { mkdtempSync, rmSync, existsSync } = require('node:fs')
+const { DatabaseSync } = require('node:sqlite')
+const { tmpdir } = require('node:os')
+const { basename, join, resolve } = require('node:path')
+
+// The opt-in WebGL E2E launches the real app twice inside one Playwright
+// worker. Both launches must get their own electerm data root (DATA_PATH) and
+// their own Chromium profile, or a crashed/closing app leaks configuration,
+// history and chunk caches into the developer's real ~/.config-ish dir and into
+// the next test. These tests exercise the real factory in a single Node
+// process -- exactly the shape of "two launches in one worker" -- and pin the
+// ownership rules of the cleanup helper.
+
+const iso = require('../e2e/common/webgl-test-isolation')
+const base = require('../e2e/common/app-options-webgl')
+const { userNoEncryptConfigId } = require('../../app/common/constants')
+const defaultUserName = require('../../app/common/default-user-name')
+
+const created = []
+const launchOptions = () => {
+  const options = iso.createWebglLaunchOptions()
+  created.push(options)
+  return options
+}
+
+const profileArg = args => args.find(arg => arg.startsWith('--user-data-dir='))
+
+after(() => {
+  for (const options of created) {
+    iso.cleanupWebglLaunchOptions(options)
+  }
+})
+
+describe('createWebglLaunchOptions', () => {
+  it('gives every launch in one process a fresh data root and profile', () => {
+    const first = launchOptions()
+    const second = launchOptions()
+
+    assert.notEqual(first.env.DATA_PATH, second.env.DATA_PATH)
+    assert.match(basename(resolve(first.env.DATA_PATH)), /^data$/)
+    assert.match(basename(resolve(second.env.DATA_PATH)), /^data$/)
+    assert.match(
+      basename(resolve(first.env.DATA_PATH, '..')),
+      /^electerm-webgl-e2e-/
+    )
+    assert.notEqual(
+      resolve(first.env.DATA_PATH, '..'),
+      resolve(second.env.DATA_PATH, '..')
+    )
+
+    const firstProfile = profileArg(first.args)
+    const secondProfile = profileArg(second.args)
+    assert.ok(firstProfile, 'the launch must carry --user-data-dir')
+    assert.ok(secondProfile, 'the launch must carry --user-data-dir')
+    assert.notEqual(firstProfile, secondProfile)
+    // Exactly one profile per launch: a leftover inherited flag would make
+    // Electron's "--user-data-dir" resolution ambiguous.
+    assert.equal(
+      first.args.filter(arg => arg.startsWith('--user-data-dir=')).length,
+      1
+    )
+    assert.equal(
+      firstProfile,
+      `--user-data-dir=${resolve(first.env.DATA_PATH, '..', 'profile')}`
+    )
+    assert.equal(
+      secondProfile,
+      `--user-data-dir=${resolve(second.env.DATA_PATH, '..', 'profile')}`
+    )
+  })
+
+  it('seeds the isolated data root so a developer-run app cannot swallow the launch', () => {
+    const options = launchOptions()
+    const dbPath = join(
+      options.env.DATA_PATH,
+      'users',
+      defaultUserName,
+      'electerm_data.db'
+    )
+    assert.equal(existsSync(dbPath), true, 'the isolated data root must be seeded')
+
+    const db = new DatabaseSync(dbPath)
+    try {
+      const row = db
+        .prepare('SELECT data FROM data WHERE _id = ?')
+        .get(userNoEncryptConfigId)
+      assert.ok(row, 'the no-encrypt config row must exist')
+      assert.equal(JSON.parse(row.data).allowMultiInstance, true)
+    } finally {
+      db.close()
+    }
+  })
+
+  it('does not mutate the shared base options', () => {
+    const before = JSON.stringify({ env: base.env, args: base.args })
+    const first = launchOptions()
+    const second = launchOptions()
+
+    assert.equal(JSON.stringify({ env: base.env, args: base.args }), before)
+    assert.notEqual(first.args, base.args)
+    assert.notEqual(first.env, base.env)
+    assert.notEqual(second.env.DATA_PATH, base.env.DATA_PATH)
+  })
+
+  it('keeps every upstream launch argument and environment value', () => {
+    const options = launchOptions()
+    const { args, env } = options
+
+    assert.equal(env.NODE_TEST, base.env.NODE_TEST)
+    assert.equal(env.ELECTRON_DISABLE_SANDBOX, base.env.ELECTRON_DISABLE_SANDBOX)
+    assert.equal(args.includes('--disable-gpu'), false)
+    assert.equal(args[0], base.args[0])
+    assert.equal(args.includes('--disable-dev-shm-usage'), true)
+
+    // Every base argument survives byte for byte except the profile flag,
+    // which the factory replaces with the per-launch one.
+    const upstream = base.args.filter(arg => !arg.startsWith('--user-data-dir='))
+    const mine = args.filter(arg => !arg.startsWith('--user-data-dir='))
+    assert.deepEqual(mine, upstream)
+
+    // ... and the sandbox flags are inherited, not re-derived.
+    for (const flag of ['--no-sandbox', '--disable-setuid-sandbox']) {
+      assert.equal(args.includes(flag), base.args.includes(flag))
+    }
+  })
+})
+
+describe('cleanupWebglLaunchOptions', () => {
+  it('removes a root it created and refuses everything else', () => {
+    const options = launchOptions()
+    const root = resolve(options.env.DATA_PATH, '..')
+    assert.equal(existsSync(root), true)
+
+    const foreign = mkdtempSync(join(tmpdir(), 'electerm-webgl-not-ours-'))
+    try {
+      assert.equal(
+        iso.cleanupWebglLaunchOptions({ env: { DATA_PATH: join(foreign, 'data') } }),
+        false,
+        'a directory this module did not create must never be removed'
+      )
+      assert.equal(existsSync(foreign), true)
+    } finally {
+      rmSync(foreign, { recursive: true, force: true })
+    }
+
+    assert.equal(iso.cleanupWebglLaunchOptions(options), true)
+    assert.equal(existsSync(root), false)
+    // Idempotent: a second call has nothing left to own.
+    assert.equal(iso.cleanupWebglLaunchOptions(options), false)
+  })
+})
