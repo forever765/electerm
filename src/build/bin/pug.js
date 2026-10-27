@@ -7,6 +7,9 @@ const pug = require('pug')
 const { resolve } = require('path')
 const pack = require('../../../package.json')
 const deepCopy = require('json-deep-copy')
+const { createBuildId } = require('../build-id.js')
+
+const buildId = createBuildId(pack.version)
 
 const entryPug = resolve(
   __dirname,
@@ -31,6 +34,7 @@ const defaultAIPreset = {
 
 const data = {
   version: pack.version,
+  buildId,
   siteName: pack.name,
   isDev: false,
   defaultAIPreset,
@@ -46,7 +50,7 @@ const data = {
 function getEntryChunks () {
   const entry = resolve(
     __dirname,
-    `../../../work/app/assets/js/electerm-${pack.version}.js`
+    `../../../work/app/assets/js/electerm-${buildId}.js`
   )
   try {
     const src = fs.readFileSync(entry, 'utf-8')

@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 // import htmlPurge from 'vite-plugin-purgecss'
-import { cwd, version } from './common.js'
+import { cwd, buildId } from './common.js'
 import { resolve } from 'path'
 import def from './def.js'
 
@@ -68,15 +68,15 @@ export default defineConfig({
       input: buildInput(),
       output: {
         format: 'esm',
-        entryFileNames: `js/[name]-${version}.js`,
-        chunkFileNames: `chunk/[name]-${version}-[hash].js`,
+        entryFileNames: `js/[name]-${buildId}.js`,
+        chunkFileNames: `chunk/[name]-${buildId}-[hash].js`,
         dir: resolve(cwd, '../../../work/app/assets'),
         assetFileNames: chunkInfo => {
           const { name } = chunkInfo
           if (/\.(png|jpe?g|gif|svg|webp|ico|bmp)$/i.test(name)) {
             return `images/${name}`
           } else if (name && name.endsWith('.css')) {
-            return `css/style-${version}[extname]`
+            return `css/style-${buildId}[extname]`
           } else {
             return 'assets/[name]-[hash][extname]'
           }

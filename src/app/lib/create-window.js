@@ -119,7 +119,12 @@ exports.createWindow = async function (userConfig) {
   const port = isDev
     ? process.env.devPort || 5570
     : await getPort()
-  const opts = `http://127.0.0.1:${port}/index.html?v=${packInfo.version}`
+  // The app server sends index.html with no-cache, so the top level URL only
+  // needs a per-process nonce: a reload/restart never reuses a cached document.
+  // The diagnostic build ID lives in the HTML and entry URLs instead, so it
+  // never has to be handed to the main process.
+  const pageLoadId = `${packInfo.version}-${process.pid}-${Date.now()}`
+  const opts = `http://127.0.0.1:${port}/index.html?v=${encodeURIComponent(pageLoadId)}`
   // If loading the URL fails (e.g. proxy/firewall interference), show error page
   win.webContents.once('did-fail-load', (event, errorCode, errorDescription) => {
     console.error('Failed to load app URL:', errorCode, errorDescription)

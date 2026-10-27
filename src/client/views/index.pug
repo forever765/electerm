@@ -36,12 +36,12 @@ html
       }
 
     - if (!isDev)
-      link(rel='stylesheet', href='css/style-' + version + '.css')
+      link(rel='stylesheet', href='css/style-' + buildId + '.css')
       //- Start the app bundle fetch during HTML parse instead of after
       //- basic.js has run. basic.js injects the <script> dynamically, so without
       //- this hint the request only goes out ~130ms later -- and the bundle's
       //- ~190 static chunk imports are not even discovered until it arrives.
-      link(rel='modulepreload', href='js/electerm-' + version + '.js')
+      link(rel='modulepreload', href='js/electerm-' + buildId + '.js')
       each c in preloadChunks
         link(rel='modulepreload', href=c)
       style(id='theme-css').
@@ -72,7 +72,7 @@ html
     - else
       //- script(src='/external/react.production.min.js?' + version)
       //- script(src='/external/react-dom.production.min.js?' + version)
-      - var url = src='/js/basic-' + version + '.js'
+      - var url = src='/js/basic-' + buildId + '.js'
       script(src=url1, type='module')
       script(src=url, type='module')
 

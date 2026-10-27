@@ -5,12 +5,14 @@ import '../css/basic.styl'
 import '../css/mobile.styl'
 import '../common/pre'
 
-const { isDev } = window.et
-const { version } = window.pre.packInfo
+const { isDev, buildId, version } = window.et
+const assetId = buildId || version
+
+console.info(`[render-build] ${assetId}`)
 
 async function loadWorker () {
   return new Promise((resolve) => {
-    const url = !isDev ? `js/worker-${version}.js` : 'js/worker.js'
+    const url = !isDev ? `js/worker-${assetId}.js` : 'js/worker.js'
     window.worker = new window.Worker(url)
     function onInit (e) {
       if (!e || !e.data) {
@@ -34,7 +36,7 @@ async function load () {
   }
   function loadScript () {
     const rcs = document.createElement('script')
-    const url = !isDev ? `js/electerm-${version}.js` : 'js/electerm.js'
+    const url = !isDev ? `js/electerm-${assetId}.js` : 'js/electerm.js'
     rcs.src = url
     rcs.type = 'module'
     rcs.onload = () => {

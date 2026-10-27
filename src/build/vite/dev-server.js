@@ -1,5 +1,5 @@
 import logger from 'morgan'
-import { viewPath, env, staticPaths, pack, isProd, cwd } from './common.js'
+import { viewPath, env, staticPaths, pack, isProd, cwd, buildId } from './common.js'
 import express from 'express'
 import { createServer as createViteServer } from 'vite'
 import conf from './conf.js'
@@ -26,6 +26,7 @@ const defaultAIPreset = {
 
 const base = {
   version: pack.version,
+  buildId,
   isDev: !isProd,
   siteName: pack.name,
   defaultAIPreset
