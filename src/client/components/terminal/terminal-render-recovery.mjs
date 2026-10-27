@@ -30,12 +30,15 @@ export function disposeWebglAddon ({
 }
 
 /**
- * Watches the raw `webglcontextlost` event on xterm's canvas and deliberately
- * leaves the browser's recovery policy alone: preventDefault is never called,
- * xterm's 3s onContextLoss timeout is never registered and `webglcontextrestored`
- * is never observed. A restored context can still leave xterm's renderer
- * permanently black, so electerm tears the addon down on loss and rebuilds the
- * terminal instead of waiting for a restore.
+ * Watches the raw `webglcontextlost` event on xterm's canvas. The locked xterm
+ * version already registers its own `webglcontextlost` listener (which calls
+ * preventDefault) and its 3s onContextLoss timer when the renderer is
+ * constructed; this listener deliberately does not replace or reimplement that
+ * upstream policy — it exists so electerm learns about the loss synchronously.
+ * On loss we dispose the addon in the same tick, and that dispose clears
+ * xterm's timer and removes its listener. A restored context can still leave
+ * the renderer permanently black, so electerm tears the addon down and rebuilds
+ * the terminal instead of waiting for a restore.
  *
  * xterm exposes no public loss event, so this reads the same private
  * `_renderer._gl` the upstream context-release fix relies on.

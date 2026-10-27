@@ -157,17 +157,29 @@ describe('cleanupWebglLaunchOptions', () => {
 // electermPort、electermHost、tokenElecterm。src/app/server/child-process.js
 // 用 Object.assign(默认值, cleanEnv) 组装后端子进程环境，cleanEnv 会覆盖它自己的
 // 默认值，于是测试启动的应用会去连开发者实例的端口（EADDRINUSE）或拿错 token。
-// factory 必须在每次 launch 的 env 副本里删掉这三个键，同时不改动 base.env。
-describe('inherited instance credentials', () => {
-  const KEYS = ['electermPort', 'electermHost', 'tokenElecterm']
+//
+// wsPort / type 走的是同一个覆盖机制，只是发生在更下一层：
+// src/app/server/session-process.js:41-52 用
+// Object.assign({ wsPort: port, type }, cleanEnv) 组装 session-server 子进程环境，
+// cleanEnv 来自 process.env 且位于后面；src/app/server/session-server.js:37-42
+// 直接读取 process.env.wsPort/type 并 app.listen。父环境里残留的旧会话端口会
+// 覆盖本次新分配的端口，导致绑定旧端口（与前端预期端口不一致）或直接失败。
+// 所以 factory 必须在每次 launch 的 env 副本里删掉这五个键，同时不改动 base.env、
+// 也不影响其他环境变量。
+describe('inherited session environment', () => {
+  const KEYS = ['electermPort', 'electermHost', 'tokenElecterm', 'wsPort', 'type']
+  // 一个与隔离无关的变量，用来证明清理不是整份 env 被替换/清空。
+  const SENTINEL_KEY = 'ELECTERM_E2E_ISOLATION_SENTINEL'
+  const SENTINEL_VALUE = 'sentinel-kept'
 
-  // 真实链路必须在“父环境已带这三个变量”时加载，才能证明快照后的 base.env 里
-  // 确实有它们；用子进程模拟，输出只含布尔值，不打印 token 值。
+  // 真实链路必须在“父环境已带这五个变量”时加载，才能证明快照后的 base.env 里
+  // 确实有它们；用子进程模拟，输出只含键名与布尔值，不打印 token 或任何值。
   function readFactoryWithInheritedEnv (inherited) {
     const script = `
       const iso = require('./src/test/e2e/common/webgl-test-isolation')
       const base = require('./src/test/e2e/common/app-options-webgl')
       const keys = ${JSON.stringify(KEYS)}
+      const sentinel = ${JSON.stringify(SENTINEL_KEY)}
       const present = o => keys.filter(k => Object.prototype.hasOwnProperty.call(o, k))
       const parentHas = keys.filter(k => process.env[k] !== undefined)
       const first = iso.createWebglLaunchOptions()
@@ -177,7 +189,9 @@ describe('inherited instance credentials', () => {
         baseHas: present(base.env),
         baseMatchesParent: keys.filter(k => base.env[k] === process.env[k]),
         launchHas: present(first.env),
-        secondLaunchHas: present(second.env)
+        secondLaunchHas: present(second.env),
+        baseSentinel: base.env[sentinel] === process.env[sentinel],
+        launchSentinel: first.env[sentinel] === process.env[sentinel]
       }
       iso.cleanupWebglLaunchOptions(first)
       iso.cleanupWebglLaunchOptions(second)
@@ -192,21 +206,26 @@ describe('inherited instance credentials', () => {
     return JSON.parse(out)
   }
 
-  it('strips electermPort/electermHost/tokenElecterm from the launch env only', () => {
+  it('strips the inherited instance and session env from the launch env only', () => {
     const inherited = {
       electermPort: '39876',
       electermHost: '127.0.0.1',
-      tokenElecterm: 'inherited-placeholder-token'
+      tokenElecterm: 'inherited-placeholder-token',
+      wsPort: '39878',
+      type: 'local',
+      [SENTINEL_KEY]: SENTINEL_VALUE
     }
     const result = readFactoryWithInheritedEnv(inherited)
 
-    // 前置：模拟的父环境确实带有这三个变量，base 快照也继承到了原值。
+    // 前置：模拟的父环境确实带有这五个变量，base 快照也继承到了原值。
     assert.deepEqual(result.parentHas, KEYS)
     assert.deepEqual(result.baseHas, KEYS)
     assert.deepEqual(result.baseMatchesParent, KEYS)
+    assert.equal(result.baseSentinel, true, 'base.env must keep unrelated variables')
 
-    // 修复点：每次 launch 的 env 都不再带它们。
+    // 修复点：每次 launch 的 env 都不再带它们，其他环境变量原样保留。
     assert.deepEqual(result.launchHas, [])
     assert.deepEqual(result.secondLaunchHas, [])
+    assert.equal(result.launchSentinel, true, 'unrelated variables must survive the cleanup')
   })
 })

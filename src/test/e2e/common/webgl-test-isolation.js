@@ -26,11 +26,13 @@
  *    our launch to that app and quit. This changes the test's own throwaway
  *    config only -- the app's single-instance logic is untouched. With that
  *    forwarding out of the way, the inherited instance credentials
- *    (electermPort / electermHost / tokenElecterm) are dropped from the launch
- *    env so the app's own backend picks a free port and generates its own
- *    token, instead of being pointed at the developer's running instance.
- *    That env cleanup is what the preflight verified; it is not a change to
- *    src/app/server/child-process.js.
+ *    (electermPort / electermHost / tokenElecterm) and the inherited session
+ *    server environment (wsPort / type, which session-process.js would
+ *    otherwise pass on to the session-server child) are dropped from the
+ *    launch env so the app's own backend picks a free port, generates its own
+ *    token and starts its session server on the port it allocated. That env
+ *    cleanup is what the preflight verified; it is not a change to
+ *    src/app/server/child-process.js or src/app/server/session-process.js.
  *
  * Everything else comes from ./app-options-webgl.js, which is itself
  * ./app-options.js minus --disable-gpu. Do not re-list launch arguments here:
@@ -48,12 +50,21 @@ const defaultUserName = require('../../../app/common/default-user-name')
 const ROOT_PREFIX = 'electerm-webgl-e2e-'
 const ownedRoots = new Set()
 
-// 后端子进程的启动环境由 child-process.js 决定，必须由它自己生成；
-// 从父环境继承来的实例凭据会让测试连到别人的服务。
+// 后端子进程的启动环境由 child-process.js / session-process.js 决定，必须由它们
+// 自己生成；从父环境继承来的实例凭据与旧会话端口会让测试连到别人的服务或绑定
+// 到上一次会话的端口。
+//   - electermPort / electermHost / tokenElecterm：child-process.js 以
+//     Object.assign(默认值, cleanEnv) 组装 server 子进程，继承值会压过它选好的端口。
+//   - wsPort / type：session-process.js:41-52 以
+//     Object.assign({ wsPort: port, type }, cleanEnv) 组装 session-server 子进程，
+//     cleanEnv 在后；session-server.js 直接读 process.env.wsPort/type 并 listen。
+//     父环境残留的旧会话端口会让新会话绑定旧端口，与前端预期端口不一致。
 const INHERITED_INSTANCE_ENV_KEYS = [
   'electermPort',
   'electermHost',
-  'tokenElecterm'
+  'tokenElecterm',
+  'wsPort',
+  'type'
 ]
 
 /**
@@ -91,10 +102,11 @@ function createWebglLaunchOptions () {
   mkdirSync(profilePath, { recursive: true })
   seedIsolatedData(dataPath)
 
-  // 父进程可能正运行 electerm（或从它继承环境），从而导出下面这三个变量。
-  // 后端由 src/app/server/child-process.js 以 Object.assign(默认值, cleanEnv)
-  // 组装环境，父 env 里的值会压过它自己选好的端口和 token：测试会去连开发者
-  // 实例的 127.0.0.1:30975（EADDRINUSE）或用错 token 导致前端鉴权失败。
+  // 父进程可能正运行 electerm（或从它继承环境），从而导出下面这些变量。
+  // 后端由 src/app/server/child-process.js 与 session-process.js 以
+  // Object.assign(默认值, cleanEnv) 组装环境，父 env 里的值会压过它们自己选好的
+  // 端口、token 和会话类型：测试会去连开发者实例的 127.0.0.1:30975（EADDRINUSE）、
+  // 用错 token 导致前端鉴权失败，或让 session-server 仍绑定上一次会话的 wsPort。
   // 只删除本次 launch 的 env 副本，base.env 保持原样（其他测试/E2E 不受影响）。
   const env = {
     ...base.env,
