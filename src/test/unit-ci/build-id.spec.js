@@ -58,9 +58,14 @@ test('production HTML and its preload hints share the explicit build ID', () => 
     })
     assert.equal(run.status, 0, run.stderr)
     const html = fs.readFileSync(path.join(tmpRoot, 'work/app/assets/index.html'), 'utf-8')
-    assert.match(html, new RegExp(`href="css/style-${buildId}\\.css"`))
-    assert.match(html, new RegExp(`href="js/electerm-${buildId}\\.js"`))
-    assert.match(html, new RegExp(`src="/js/basic-${buildId}\\.js"`))
+    const serialized = JSON.parse(html.match(/window\.et = (\{.*?\})<\/script>/s)[1])
+    // basic.js picks its worker and entry URLs from window.et.buildId with a
+    // version fallback, so a mismatch here would request a URL that does not
+    // exist in the build.
+    assert.equal(serialized.buildId, buildId)
+    assert.match(html, new RegExp(`href="css/style-${serialized.buildId}\\.css"`))
+    assert.match(html, new RegExp(`href="js/electerm-${serialized.buildId}\\.js"`))
+    assert.match(html, new RegExp(`src="/js/basic-${serialized.buildId}\\.js"`))
     assert.match(html, new RegExp(`href="chunk/xterm-${buildId}-AbCd1234\\.js"`))
     assert.doesNotMatch(html, new RegExp(`electerm-${version}\\.js`))
     assert.doesNotMatch(html, new RegExp(`style-${version}\\.css`))
