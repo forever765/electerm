@@ -18,6 +18,8 @@ import uid from '../common/uid'
 import newTerm, { updateCount } from '../common/new-terminal.js'
 import { action } from 'manate'
 import { shouldCaptureTerminalReloadState } from '../components/terminal/ssh-reload-state.js'
+import dangerousSessionFields from '../common/dangerous-session-fields'
+import { distributeTabsEvenly } from '../common/distribute-tabs'
 
 function captureSshSessionState (tab, config) {
   return shouldCaptureTerminalReloadState(tab, config)
@@ -116,6 +118,11 @@ export default Store => {
       status: statusMap.processing // Reset status
     }
     delete newTab._reloadState
+    // Keepalive is per-session runtime state (the toolbar heartbeat icon /
+    // MCP set_electerm_terminal_keepalive), not a connection property: a
+    // reloaded session starts with a fresh terminal that is not sending
+    // keepalives, so the flag must not be carried over.
+    delete newTab.keepaliveEnabled
     if (reloadState) {
       newTab._reloadState = reloadState
     }
@@ -178,6 +185,8 @@ export default Store => {
       isTransporting: undefined
     }
     delete duplicatedTab._reloadState
+    // see reloadTab: keepalive is per-session runtime state, never inherited
+    delete duplicatedTab.keepaliveEnabled
     if (sessionState) {
       duplicatedTab._reloadState = sessionState
     }
@@ -269,6 +278,15 @@ export default Store => {
 
     if (removedIds.length) {
       window.store.fixCurrentTabIds(tabs, removedIds)
+      // a quick command waiting on a delay would otherwise linger until
+      // the delay ends
+      for (const id of removedIds) {
+        window.store.stopQuickCommand(id)
+      }
+      // keep what was recorded in a closed tab, the user can still save it
+      if (removedIds.includes(window.store.qmRecording?.tabId)) {
+        window.store.stopQuickCommandRecording()
+      }
     }
   }
 
@@ -395,6 +413,13 @@ export default Store => {
       }
     }
     newTab.batch = batchNum
+    // Keepalive is per-session runtime state set by the toolbar heartbeat
+    // icon / MCP set_electerm_terminal_keepalive on an already-open tab.
+    // Every path that creates a tab (history replay, bookmark open, MCP
+    // open_tab, clone-to-layout) funnels through here, so strip it once:
+    // a brand-new tab must not render as keepalive-on while its terminal
+    // is not actually sending keepalives.
+    delete newTab.keepaliveEnabled
     if (!newTab.id) {
       newTab.id = generate()
     }
@@ -415,23 +440,9 @@ export default Store => {
     store.updateHistory(newTab)
   }
 
-  // Dangerous props that should not be accepted from IPC
-  const dangerousTabProps = [
-    'execLinux',
-    'execMac',
-    'execWindows',
-    'execWindowsArgs',
-    'execMacArgs',
-    'execLinuxArgs',
-    'setEnv',
-    'runScripts',
-    'interactiveValues',
-    'triggers'
-  ]
-
   Store.prototype.ipcOpenTab = function (parsed) {
     const safeTab = Object.fromEntries(
-      Object.entries(parsed).filter(([key]) => !dangerousTabProps.includes(key))
+      Object.entries(parsed).filter(([key]) => !dangerousSessionFields.includes(key))
     )
     return window.store.addTab(safeTab)
   }
@@ -504,12 +515,45 @@ export default Store => {
     }
     ntb.batch = (currentLayoutBatch + 1) % maxBatch
     if (layout === 'c1') {
-      store.setLayout('c2')
+      store.setLayout('c2', false)
     }
     store.addTab(ntb)
   }
 
-  Store.prototype.setLayout = function (layout) {
+  // Spread tabs over the panes of a layout with more panes.
+  // Only used when leaving the single layout: once more than one pane is on
+  // screen the arrangement is the user's, and is left alone.
+  Store.prototype.distributeTabs = function (newCount) {
+    const { store } = window
+    const { tabs } = store
+    if (tabs.length < 2) {
+      return
+    }
+    // contiguous chunks keep the tab order: [A B C D E] -> [A B] [C D] [E]
+    const batches = distributeTabsEvenly(tabs.length, newCount)
+    tabs.forEach((t, i) => {
+      t.batch = batches[i]
+    })
+  }
+
+  // make sure every pane has a valid active tab
+  Store.prototype.fixActiveTabIds = function (count) {
+    const { store } = window
+    for (let b = 0; b < count; b++) {
+      const inBatch = store.tabs.filter(t => t.batch === b)
+      const key = `activeTabId${b}`
+      if (!inBatch.some(t => t.id === store[key])) {
+        store[key] = inBatch.length ? inBatch[0].id : ''
+      }
+    }
+    const active = store.tabs.find(t => t.id === store.activeTabId)
+    if (active) {
+      store[`activeTabId${active.batch}`] = active.id
+      store.currentLayoutBatch = active.batch
+    }
+  }
+
+  Store.prototype.setLayout = function (layout, redistribute = true) {
     const { store } = window
     const prevLayout = store.layout
     const { activeTabId } = store
@@ -546,6 +590,15 @@ export default Store => {
       if (store.currentLayoutBatch >= newBatchCount) {
         store.currentLayoutBatch = newBatchCount - 1
       }
+    } else if (
+      redistribute &&
+      store.config.autoDistributeTabsWhenLayoutChange &&
+      prevBatchCount === 1 &&
+      newBatchCount > 1
+    ) {
+      // leaving the single layout: hand the tabs out evenly
+      store.distributeTabs(newBatchCount)
+      store.fixActiveTabIds(newBatchCount)
     }
     store.focus()
   }
@@ -567,6 +620,12 @@ export default Store => {
       !tab.type &&
       !tab.host
     ) {
+      return
+    }
+    // a tab opened by a custom widget carries credentials that widget produced
+    // (a password manager, for instance); they must not be copied into the
+    // connection history, which is synced
+    if (typeof tab.from === 'string' && tab.from.startsWith('widget:')) {
       return
     }
     const { store } = window

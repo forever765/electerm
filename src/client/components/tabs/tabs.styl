@@ -19,6 +19,20 @@
 .not-system-ui.not-mac.not-webapp
   .tabs-extra
     right 96px
+// Windows system title bar: native min/max/close are drawn over the tab bar's
+// top-right (window controls overlay). The strip they occupy is whatever the
+// titlebar area does not cover; 140px is the fallback for when the env() vars
+// are unavailable — it has to match windowControlsOverlayWidthFallback in
+// common/constants.js (the JS side of the same measurement).
+.wco
+  --wco-controls-width calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100vw - 140px)))
+  // Only the pane whose tab bar sits under those buttons has to clear them —
+  // the same pane that owns the window controls (shouldRenderWindowControl in
+  // index.jsx). In a split layout the other panes' tab bars are not under the
+  // buttons, so their own buttons stay at their own right edge.
+  .tabs.wco-bar
+    .tabs-extra
+      right var(--wco-controls-width)
 .tabs-inner
   position relative
   z-index 2
@@ -220,6 +234,8 @@
   .window-controls
     display none
 .tab-title-tag
+  display inline-flex
+  align-items center
   margin-right 5px
   font-size 14px
 
@@ -232,6 +248,30 @@
 .tab-pin
   margin-right 3px
   font-size 11px
+
+.tab-qm-running
+  font-size 11px
+  color var(--primary)
+
+// Keep every box of the title inside the tab. The tab's no-drag region is
+// inherited by its children, and the OS region uses each element's full box
+// without overflow clipping, so a long title's text box would cut a no-drag
+// hole into the empty titlebar past the tab. Flex rows with min-width 0 let
+// the text itself carry the ellipsis instead of overflowing.
+.tab
+  .tab-title
+    display flex
+    align-items center
+    justify-content center
+    min-width 0
+    > *
+      flex none
+    > .tab-title
+    > .tab-title-text
+      flex 0 1 auto
+      min-width 0
+      overflow hidden
+      text-overflow ellipsis
 
 .ssh-tunnel-list-wrapper
   max-height 300px
@@ -301,7 +341,11 @@
   text-overflow ellipsis
   white-space nowrap
 
+// interactive elements inside a native drag region (-webkit-app-region drag)
+// must opt out or the OS swallows their clicks; Windows only has a native
+// drag region in window-controls-overlay mode (.wco)
 .not-webapp.not-win
+.not-webapp.wco
   .tab
   .tabs-add-btn
   .window-control-box

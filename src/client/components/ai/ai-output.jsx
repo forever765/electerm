@@ -1,5 +1,6 @@
 import { useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { copy } from '../../common/clipboard'
 import Link from '../common/external-link'
 import { Tag, Popconfirm, Button, Alert } from 'antd'
@@ -10,6 +11,7 @@ import {
   FlagFilled
 } from '@ant-design/icons'
 import getBrand from './get-brand'
+import CopyIcon from './copy-icon'
 
 const e = window.translate
 
@@ -97,12 +99,7 @@ export default function AIOutput ({ item }) {
   }
 
   function handleToggleFlag () {
-    const index = window.store.aiChatHistory.findIndex(i => i.id === item.id)
-    if (index === -1) {
-      return
-    }
-    window.store.aiChatHistory[index].flagged = !window.store.aiChatHistory[index].flagged
-    window.store.aiChatHistory = [...window.store.aiChatHistory]
+    window.store.updateAiHistoryEntry(item.id, { flagged: !item.flagged })
   }
 
   function renderFlag () {
@@ -143,8 +140,12 @@ export default function AIOutput ({ item }) {
     )
   }
 
+  // remark-gfm: react-markdown only does CommonMark by default, so GFM tables
+  // (and strikethrough / task lists / autolinks) arrive as literal text.
+  // Styling for the resulting table lives in ai.styl.
   const mdProps = {
     children: response,
+    remarkPlugins: [remarkGfm],
     components: {
       code: renderCode
     }
@@ -160,6 +161,9 @@ export default function AIOutput ({ item }) {
             <>
               {renderBrand()}
               <ReactMarkdown {...mdProps} />
+              <div className='ai-output-actions'>
+                <CopyIcon text={response} />
+              </div>
             </>
             )}
       </div>

@@ -6,15 +6,17 @@ import {
 } from 'antd'
 import { CloseOutlined, CopyOutlined, ThunderboltOutlined } from '@ant-design/icons'
 import { copy } from '../../common/clipboard'
+import { maskUrl } from '../../common/mask-url'
 import classnames from 'classnames'
 import { auto } from 'manate/react'
 
 const e = window.translate
 
-export default auto(function WidgetInstance ({ item }) {
+export default auto(function WidgetInstance ({ item, active, onClick }) {
   const { id, title, serverInfo, autoRun } = item
   const cls = classnames('item-list-unit', {
-    'autorun-active': autoRun
+    'autorun-active': autoRun,
+    active
   })
   const delProps = {
     title: e('del'),
@@ -27,6 +29,16 @@ export default auto(function WidgetInstance ({ item }) {
   )
   function onConfirm () {
     window.store.stopWidget(id)
+  }
+  // the row itself opens the instance detail, so the action icons must not
+  // also trigger it
+  function stopPropagation (evt) {
+    evt.stopPropagation()
+  }
+  function handleClick () {
+    if (onClick) {
+      onClick(item)
+    }
   }
   const popProps = {
     title: e('del') + '?',
@@ -45,9 +57,9 @@ export default auto(function WidgetInstance ({ item }) {
   }
   const popoverContent = serverInfo
     ? (
-      <div>
+      <div className='wil-pop-info'>
         <div style={{ display: 'flex', alignItems: 'center' }}>
-          <span>URL: {serverInfo.url}</span>
+          <span>URL: {maskUrl(serverInfo.url)}</span>
           <CopyOutlined
             className='pointer mg1l'
             onClick={handleCopy}
@@ -70,6 +82,7 @@ export default auto(function WidgetInstance ({ item }) {
     <div
       key={id}
       className={cls}
+      onClick={handleClick}
     >
       {
         serverInfo
@@ -84,17 +97,22 @@ export default auto(function WidgetInstance ({ item }) {
             )
           : titleDiv
       }
-      <Tooltip title='Toggle auto-run'>
-        <ThunderboltOutlined
-          className='pointer list-item-autorun'
-          onClick={handleToggleAutoRun}
-        />
-      </Tooltip>
-      <Popconfirm
-        {...popProps}
+      <div
+        className='wil-item-actions'
+        onClick={stopPropagation}
       >
-        {icon}
-      </Popconfirm>
+        <Tooltip title='Toggle auto-run'>
+          <ThunderboltOutlined
+            className='pointer list-item-autorun'
+            onClick={handleToggleAutoRun}
+          />
+        </Tooltip>
+        <Popconfirm
+          {...popProps}
+        >
+          {icon}
+        </Popconfirm>
+      </div>
     </div>
   )
 })

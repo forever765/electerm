@@ -61,10 +61,15 @@ class Store {
     return window.store.innerWidth
   }
 
+  // Mobile turns a side panel into a full-screen drawer: it spans the whole
+  // viewport and its width is not user-adjustable. So the stored desktop width
+  // is ignored here, and so is the icon bar (the drawer covers it) — and the
+  // old 500px cap, which left a strip of terminal showing on windows between
+  // 500 and 600px, i.e. the top of the mobile range.
   get leftSidePanelWidth () {
     const { store } = window
     if (store.isMobile) {
-      return Math.min(store.innerWidth - store.leftSideBarWidth, 500)
+      return store.innerWidth
     }
     return store._leftSidePanelWidth
   }
@@ -78,10 +83,12 @@ class Store {
     return store._leftSideBarOpen ? sidebarWidth : 0
   }
 
+  // Same as leftSidePanelWidth: full-screen drawer on mobile, width not
+  // user-adjustable.
   get rightPanelWidth () {
     const { store } = window
     if (store.isMobile) {
-      return Math.min(store.innerWidth, 500)
+      return store.innerWidth
     }
     return store._rightPanelWidth
   }
@@ -118,10 +125,36 @@ class Store {
     return tab.props.tab
   }
 
-  get shouldSendWindowMove () {
-    return isWin &&
-        !window.et.isWebApp &&
-        !window.store.config.useSystemTitleBar
+  // Title bar the window really has. config.useSystemTitleBar only takes effect
+  // after a restart, so the UI follows the window frame, not the setting.
+  // Windows always has the system frame (see app/lib/title-bar.js), so this is
+  // always true there; the setting only decides the macOS/Linux chrome.
+  get isSystemTitleBar () {
+    const { store } = window
+    if (window.et.isWebApp) {
+      return !!store.config.useSystemTitleBar
+    }
+    if (store._isSystemTitleBar === undefined) {
+      store._isSystemTitleBar = !!window.pre.runSync('isSystemTitleBar')
+    }
+    return store._isSystemTitleBar
+  }
+
+  // Windows: the native caption buttons are drawn over the tab bar (window
+  // controls overlay), so there is no separate title strip and the tab bar is
+  // the drag area. Always on for the desktop app.
+  get isWindowControlsOverlay () {
+    return isWin && !window.et.isWebApp && this.isSystemTitleBar
+  }
+
+  // Whether the window has a title strip of its own to drag the window by —
+  // macOS' traffic-light area, or a Linux native title bar. Windows never has
+  // one: isSystemTitleBar is true there (the frame really is the system one)
+  // but the caption buttons sit *over* the tab bar, so the tab bar is the drag
+  // area instead. This is the derived "is there a strip" question the UI asks;
+  // the name above is about the frame.
+  get hasNativeTitleStrip () {
+    return this.isSystemTitleBar && !this.isWindowControlsOverlay
   }
 
   get batchInputSelectedTabIds () {
@@ -132,11 +165,26 @@ class Store {
     const {
       rightPanelTab,
       config: {
-        baseURLAI
+        baseURLAI,
+        nameAI
       }
     } = window.store
     if (rightPanelTab === 'ai') {
-      return getBrand(baseURLAI).brand || 'Custom AI Model'
+      // A real provider is labelled by its address, so a stale name cannot
+      // relabel someone else's endpoint. `nameAI` only fills the gap the URL
+      // leaves: getBrand takes the second-to-last hostname label, which a local
+      // endpoint does not have — `localhost` throws and `127.0.0.1` yields
+      // "0". Neither is a brand, so a widget that points electerm at a local
+      // endpoint names itself there instead of the panel reading "Custom AI
+      // Model", or worse, "0".
+      const brand = getBrand(baseURLAI).brand
+      return (brand && /[A-Za-z]/.test(brand) ? brand : nameAI) || 'Custom AI Model'
+    }
+    if (rightPanelTab === 'cmdHistory') {
+      return window.translate('cmdHistory')
+    }
+    if (rightPanelTab === 'quickCommands') {
+      return window.translate('quickCommands')
     }
     return createTitle(window.store.currentTab)
   }
@@ -210,7 +258,9 @@ class Store {
       (p, q) => {
         return [
           ...p,
-          ...(q.commands || []).map(c => c.command)
+          ...(q.commands || [])
+            .filter(c => c.type !== 'key' && c.command)
+            .map(c => c.command)
         ]
       },
       []

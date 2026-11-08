@@ -9,6 +9,16 @@ import React, { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
 import './modal.styl'
 
+function isEmptyNode (node) {
+  if (node === null || node === undefined || node === false || node === '') {
+    return true
+  }
+  if (Array.isArray(node)) {
+    return node.every(isEmptyNode)
+  }
+  return false
+}
+
 export default function Modal (props) {
   const {
     open,
@@ -23,6 +33,9 @@ export default function Modal (props) {
     onCancel
   } = props
 
+  const hasBody = !isEmptyNode(children)
+  const hasFooter = !isEmptyNode(footer)
+
   function handleMaskClick (e) {
     if (e.target === e.currentTarget && maskClosable && onCancel) {
       onCancel()
@@ -35,24 +48,10 @@ export default function Modal (props) {
     }
   }
 
-  if (!open) {
-    return null
-  }
-
-  const modalStyle = {
-    zIndex
-  }
-
-  const contentStyle = {
-    width: typeof width === 'number' ? `${width}px` : width
-  }
-
-  const cls = classnames(
-    'custom-modal-wrap',
-    wrapClassName,
-    className
-  )
-
+  // Declared before the `!open` early return on purpose: a hook after it would
+  // run on the open render but not on the closed one, and React refuses that
+  // ("Rendered more hooks than during the previous render") the first time a
+  // caller flips `open` from false to true.
   useEffect(() => {
     if (!open) return
 
@@ -76,6 +75,29 @@ export default function Modal (props) {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [open, onCancel])
 
+  if (!open) {
+    return null
+  }
+
+  const modalStyle = {
+    zIndex
+  }
+
+  const contentStyle = {
+    width: typeof width === 'number' ? `${width}px` : width
+  }
+
+  const cls = classnames(
+    'custom-modal-wrap',
+    wrapClassName,
+    className
+  )
+
+  const contentCls = classnames(
+    'custom-modal-content',
+    hasBody ? 'has-body' : 'no-body'
+  )
+
   return (
     <div className={cls} style={modalStyle}>
       <div
@@ -84,7 +106,7 @@ export default function Modal (props) {
       />
       <div className='custom-modal-container' onClick={handleMaskClick}>
         <div
-          className='custom-modal-content'
+          className={contentCls}
           style={contentStyle}
         >
           {title && (
@@ -99,10 +121,12 @@ export default function Modal (props) {
               </button>
             </div>
           )}
-          <div className='custom-modal-body'>
-            {children}
-          </div>
-          {footer !== null && footer !== undefined && (
+          {hasBody && (
+            <div className='custom-modal-body'>
+              {children}
+            </div>
+          )}
+          {hasFooter && (
             <div className='custom-modal-footer'>
               {footer}
             </div>
@@ -152,7 +176,9 @@ function createModalInstance (type, options) {
     destroy()
   }
 
-  const hasCancel = type === 'confirm'
+  // a confirm gets its own cancel button, unless the caller passes
+  // `cancelText: null` and wants its body buttons to be the only actions
+  const hasCancel = type === 'confirm' && cancelText !== null
 
   const footer = (
     <div className='custom-modal-footer-buttons'>
@@ -179,7 +205,10 @@ function createModalInstance (type, options) {
     ...rest,
     title,
     open: true,
-    onCancel: hasCancel ? handleCancel : destroy,
+    // Esc, the close button and the mask are all a cancel: a caller that
+    // waits for one (a dialog holding a connection) has to hear about it even
+    // when the dialog shows no cancel button of its own
+    onCancel: hasCancel || onCancel ? handleCancel : destroy,
     footer,
     children: content
   }
@@ -237,7 +266,7 @@ function createModalInstance (type, options) {
       ...newRest,
       title: newTitle,
       open: true,
-      onCancel: hasCancel ? newHandleCancel : destroy,
+      onCancel: hasCancel || newOnCancel ? newHandleCancel : destroy,
       footer: newFooter,
       children: newContent
     }

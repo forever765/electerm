@@ -38,7 +38,9 @@ bower_components
 build/Release
 
 # Dependency directories
-node_modules/
+# no trailing slash: that only matches directories, and a node_modules
+# symlink (a worktree reusing another checkout's deps) is a file to git
+node_modules
 jspm_packages/
 
 # TypeScript v1 declaration files
@@ -110,7 +112,7 @@ dist
 /work/
 /version
 /*.txt
-/build/web-app/client
+/src/build/web-app/client
 /*.tar
 /*.gz
 .vscode
@@ -128,3 +130,8 @@ ftp-root
 .catpaw
 .workbuddy-ai
 /test-results*
+.codeartsdoer
+.kilo
+.cursor
+.lintcache
+.npmcache

@@ -6,25 +6,29 @@ import { memo } from 'react'
 import { createTitleTag } from '../../common/create-title'
 import classnames from 'classnames'
 import highlight from '../common/highlight'
+import ItemIcon from '../common/item-icon'
 import uid from '../../common/uid'
 
 function areEqual (prevProps, nextProps) {
   const prevSelected = prevProps.selectedItemId === prevProps.item.id
   const nextSelected = nextProps.selectedItemId === nextProps.item.id
-  const prevSearchSelected = Boolean(prevProps.searchSelected)
-  const nextSearchSelected = Boolean(nextProps.searchSelected)
+  const prevRowSelected = Boolean(prevProps.rowSelected)
+  const nextRowSelected = Boolean(nextProps.rowSelected)
 
   return prevProps.isGroup === nextProps.isGroup &&
     prevProps.parentId === nextProps.parentId &&
     prevProps.staticList === nextProps.staticList &&
     prevProps.keyword === nextProps.keyword &&
+    prevProps.indentCapped === nextProps.indentCapped &&
     prevSelected === nextSelected &&
-    prevSearchSelected === nextSearchSelected &&
+    prevRowSelected === nextRowSelected &&
     prevProps.item.id === nextProps.item.id &&
     prevProps.itemLevel === nextProps.itemLevel &&
     prevProps.itemColor === nextProps.itemColor &&
+    prevProps.itemIcon === nextProps.itemIcon &&
     prevProps.itemDescription === nextProps.itemDescription &&
-    prevProps.itemLabel === nextProps.itemLabel
+    prevProps.itemLabel === nextProps.itemLabel &&
+    prevProps.itemPath === nextProps.itemPath
 }
 
 function TreeListItem (props) {
@@ -60,7 +64,8 @@ function TreeListItem (props) {
   const cls = classnames(
     {
       selected: selectedItemId === item.id,
-      'search-selected': props.searchSelected
+      // the keyboard cursor: the row the arrow keys are on, enter acts on it
+      'kb-selected': props.rowSelected
     },
     'tree-item',
     {
@@ -79,10 +84,31 @@ function TreeListItem (props) {
       />
       )
     : null
+  // a group shows its icon when it has one, and its colour square otherwise;
+  // bookmarks go through createTitleTag above
+  const groupTag = isGroup && (item.icon || item.color)
+    ? (
+      <ItemIcon
+        icon={item.icon}
+        color={item.color}
+        size={12}
+        fallback={colorTag}
+      />
+      )
+    : null
   const title = isGroup
     ? item.title
     : props.itemLabel
-  const titleAll = title + (item.description ? ' - ' + item.description : '')
+  // the ancestor path first: with the indent capped, the row's own position in
+  // the tree is no longer readable from the left edge alone
+  const pathPrefix = props.itemPath ? props.itemPath + ' / ' : ''
+  const titleAll = pathPrefix + title + (item.description ? ' - ' + item.description : '')
+  // depth marker for rows the indent cap has stopped moving right, otherwise a
+  // depth-6 row and a depth-9 row look like siblings. A single narrow glyph: it
+  // sits in the text line of a panel that is already short of width.
+  const depthMark = props.indentCapped
+    ? <span className='tree-item-depth-mark'>›</span>
+    : null
   const titleHighlight = isGroup
     ? item.title || 'no title'
     : highlight(
@@ -118,7 +144,7 @@ function TreeListItem (props) {
       <div
         {...titleProps}
       >
-        {colorTag}{tag}{titleHighlight}
+        {depthMark}{isGroup ? groupTag : tag}{titleHighlight}
       </div>
     </div>
   )

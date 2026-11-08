@@ -10,7 +10,9 @@ import {
   Loading3QuartersOutlined,
   BorderlessTableOutlined,
   LockOutlined,
-  PushpinFilled
+  PushpinFilled,
+  LoadingOutlined,
+  BorderOutlined
 } from '@ant-design/icons'
 import {
   Tooltip,
@@ -20,7 +22,7 @@ import message from '../common/message'
 import classnames from 'classnames'
 import { pick } from 'lodash-es'
 import Input from '../common/input-auto-focus'
-import createName from '../../common/create-title'
+import createName, { createTitleTag } from '../../common/create-title'
 import { addClass, removeClass } from '../../common/class'
 import isDark from '../../common/is-color-dark'
 import { action } from 'manate'
@@ -317,6 +319,10 @@ class Tab extends Component {
     window.store.closeTabsRight(this.props.tab.id)
   }
 
+  stopQuickCommand = () => {
+    window.store.stopQuickCommand(this.props.tab.id)
+  }
+
   togglePin = () => {
     const { tab } = this.props
     window.store.pinTab(tab.id, !tab.isPinned)
@@ -332,8 +338,16 @@ class Tab extends Component {
     const cloneToNextShortcut = this.getShortcut('app_cloneToNextLayout')
     const duplicateShortcut = this.getShortcut('app_duplicateTab')
     const reloadAllShortcut = this.getShortcut('app_reloadAll')
+    const qmRunning = !!window.store.runningQuickCommands[tab.id]
 
     const x = [
+      qmRunning && {
+        key: 'stopQuickCommand',
+        icon: <BorderOutlined />,
+        label: e('stopQuickCommand'),
+        extra: this.getShortcut('app_stopQuickCommand'),
+        danger: true
+      },
       {
         key: 'handleClose',
         icon: <iconsMap.CloseCircleOutlined />,
@@ -440,7 +454,9 @@ class Tab extends Component {
       } = obj
       let tunnel
       if (sshTunnel === 'dynamicForward') {
-        tunnel = `sock5://${sshTunnelLocalHost}:${sshTunnelLocalPort}`
+        tunnel = `socks5://${sshTunnelLocalHost}:${sshTunnelLocalPort}`
+      } else if (sshTunnel === 'remoteDynamicForward') {
+        tunnel = `socks5://${sshTunnelRemoteHost}:${sshTunnelRemotePort} (${e('remote')})`
       } else {
         tunnel = sshTunnel === 'forwardRemoteToLocal'
           ? `-> ${e('remote')}:${sshTunnelRemoteHost}:${sshTunnelRemotePort} -> ${sshTunnelLocalHost}:${sshTunnelLocalPort}`
@@ -517,6 +533,7 @@ class Tab extends Component {
       trigger: ['contextMenu']
     }
     const { tabCount, color = '#0088cc' } = tab
+    const runningQm = window.store.runningQuickCommands[id]
     const styleTag = color
       ? {
           background: color,
@@ -567,7 +584,16 @@ class Tab extends Component {
                     )
                   : null}
                 {tab.isPinned && <PushpinFilled className='tab-pin' />}
-                <span className='mg1r'>{title}</span>
+                {(tab.color || tab.icon) && <span className='mg1r'>{createTitleTag(tab)}</span>}
+                {
+                  runningQm && (
+                    <LoadingOutlined
+                      className='tab-qm-running mg1r'
+                      title={runningQm.name}
+                    />
+                  )
+                }
+                <span className='mg1r tab-title-text'>{title}</span>
               </span>
             </div>
           </Dropdown>

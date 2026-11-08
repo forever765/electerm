@@ -17,41 +17,16 @@
   user-select none
   -webkit-user-select none
 
-.shortcut-bar-fixed
-  display flex
-  align-items stretch
-  flex-shrink 0
-  border-right 1px solid var(--main-lighter)
-
-.shortcut-bar-icon-btn
-  width 44px
-  display flex
-  align-items center
-  justify-content center
-  background transparent
-  border none
-  color var(--text)
-  cursor pointer
-  font-size 16px
-  &:active
-    background var(--main-lighter)
-  &:hover
-    color var(--text-light)
-
-.shortcut-bar-scroll
-  flex 1
-  display flex
-  align-items center
-  gap 6px
-  padding 0 8px
-  overflow-x auto
-  overflow-y hidden
-  scrollbar-width none
-  -webkit-overflow-scrolling touch
-  &::-webkit-scrollbar
-    display none
-
+// A held button now means "keep sending this key", so the platform must not
+// treat the hold as its own gesture:
+//   - the iOS callout (Copy/Look Up) and Android's text-selection handles
+//     would swallow it — same reason .term-wrap suppresses them;
+//   - touch-action keeps the hold from turning into a scroll of the page; the
+//     bar's own horizontal scroll lives on .shortcut-bar-scroll, which is a
+//     separate element, so this only affects the button itself.
 .shortcut-bar-btn
+  -webkit-touch-callout none
+  touch-action manipulation
   flex-shrink 0
   height 32px
   min-width 32px
@@ -71,6 +46,50 @@
     color var(--primary-contrast)
   &:hover
     color var(--text-light)
+  // held down and repeating: keep the :active look for as long as the key is
+  // being re-sent, so the user can see the auto-repeat is running
+  &.repeating
+    background var(--primary)
+    color var(--primary-contrast)
+
+.shortcut-bar-fixed
+  display flex
+  align-items stretch
+  flex-shrink 0
+  border-right 1px solid var(--main-lighter)
+
+.shortcut-bar-icon-btn
+  width 44px
+  display flex
+  align-items center
+  justify-content center
+  background transparent
+  border none
+  color var(--text)
+  cursor pointer
+  font-size 16px
+  -webkit-touch-callout none
+  touch-action manipulation
+  &:active
+    background var(--main-lighter)
+  &:hover
+    color var(--text-light)
+
+.shortcut-bar-scroll
+  flex 1
+  display flex
+  align-items center
+  gap 6px
+  padding 0 8px
+  overflow-x auto
+  overflow-y hidden
+  scrollbar-width none
+  -webkit-overflow-scrolling touch
+  // a press that turns into a drag is a scroll of the button row, which is
+  // exactly what this container does — the hold itself is handled in JS
+  touch-action pan-x
+  &::-webkit-scrollbar
+    display none
 
 // while the bar is visible, lift the footer + reserve space so nothing is
 // covered (terminal area is shrunk by layout.jsx via store.shortcutBarVisible;
@@ -81,6 +100,20 @@
     bottom calc(var(--shortcut-bar-h, 44px) + var(--shortcut-bar-kb-offset, 0px))
   .remote-monitor-bar
     bottom calc(var(--shortcut-bar-h, 44px) + var(--shortcut-bar-kb-offset, 0px) + 36px)
+  // the right panel stacks on the footer exactly like the monitor bar, so it
+  // needs the same lift. Pinned is excluded: a pinned panel is a full-height
+  // dock and owns bottom 0. Mobile is excluded as well: there the panel is a
+  // full-screen drawer that covers the footer on purpose (mobile.styl).
+  &:not(.is-mobile)
+    .right-side-panel:not(.right-side-panel-pinned)
+      bottom calc(var(--shortcut-bar-h, 44px) + var(--shortcut-bar-kb-offset, 0px) + 36px)
+  // A pinned panel is still a dock, but it yields to the shortcut bar rather
+  // than the other way round: the bar is z-index 400 and spans the full
+  // viewport width by design (it ignores the left sidebar too), so it would
+  // otherwise paint over the dock's bottom edge. The dock stops above the bar
+  // only — the footer sits beside the dock, not below it.
+  .right-side-panel.right-side-panel-pinned
+    bottom calc(var(--shortcut-bar-h, 44px) + var(--shortcut-bar-kb-offset, 0px))
   .qm-wrap-tooltip
     bottom calc(var(--footer-stack-height, 36px) + var(--shortcut-bar-h, 44px) + var(--shortcut-bar-kb-offset, 0px))
 

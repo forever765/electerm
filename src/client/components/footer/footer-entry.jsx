@@ -15,6 +15,10 @@ import TriggerSessionModal from '../triggers/trigger-session-modal'
 import AIIcon from '../icons/ai-icon'
 import { isAIDisabled } from '../../common/ai-feature'
 import CmdHistory from './cmd-history'
+import QmRunStatus from '../quick-commands/qm-run-status'
+import QmRunInTabs from '../quick-commands/qm-run-in-tabs'
+import QmRecordStatus from '../quick-commands/qm-record-status'
+import QmPrompt from '../quick-commands/qm-prompt'
 
 const e = window.translate
 
@@ -24,7 +28,7 @@ const {
 
 export default auto(function FooterEntry (props) {
   function handleInfoPanel () {
-    window.store.openInfoPanel()
+    window.store.toggleInfoPanel()
   }
 
   function batchInput (cmd, selectedTabIds) {
@@ -72,9 +76,15 @@ export default auto(function FooterEntry (props) {
   }
 
   function renderQuickCommands () {
+    const { rightPanelVisible, rightPanelTab, quickCommandsInRightPanel } = props.store
+    // the Q button only owns the right panel while the panel lives there; in
+    // the footer it toggles the floating box instead, which shows its own state
+    const active = quickCommandsInRightPanel &&
+      rightPanelVisible &&
+      rightPanelTab === 'quickCommands'
     return (
       <div className='terminal-footer-unit terminal-footer-qm'>
-        <Qm />
+        <Qm active={active} />
       </div>
     )
   }
@@ -106,11 +116,19 @@ export default auto(function FooterEntry (props) {
     )
   }
 
+  function handleAIPanel () {
+    window.store.toggleAIPanel()
+  }
+
   function renderAIIcon () {
+    const { rightPanelVisible, rightPanelTab } = props.store
+    // same contract as the info icon: lit while its panel is open
+    const active = rightPanelVisible && rightPanelTab === 'ai'
     return (
       <div className='terminal-footer-unit terminal-footer-ai'>
         <AIIcon
-          onClick={window.store.handleOpenAIPanel}
+          onClick={handleAIPanel}
+          className={active ? 'active' : ''}
         />
       </div>
     )
@@ -176,11 +194,15 @@ export default auto(function FooterEntry (props) {
     if (loading) {
       return null
     }
+    const { rightPanelVisible, rightPanelTab } = props.store
+    // keep the icon lit while its panel is open so it reads as "click to close"
+    const active = rightPanelVisible && rightPanelTab === 'info'
     return (
       <div className='terminal-footer-unit terminal-footer-info'>
         <BarChartOutlined
           onClick={handleInfoPanel}
-          className='pointer font14 terminal-info-icon'
+          className={'pointer font14 terminal-info-icon' + (active ? ' active' : '')}
+          title={e('info')}
         />
       </div>
     )
@@ -202,7 +224,11 @@ export default auto(function FooterEntry (props) {
     leftSidePanelWidth,
     leftSideBarWidth,
     openedSideBar,
-    inActiveTerminal
+    inActiveTerminal,
+    rightPanelVisible,
+    rightPanelPinned,
+    rightPanelWidth,
+    isMobile
   } = props.store
   const w = leftSideBarWidth + leftSidePanelWidth
   // icon bar hidden: show a control on the left of the footer to bring the
@@ -217,22 +243,34 @@ export default auto(function FooterEntry (props) {
       </div>
       )
     : null
-  const sideProps = openedSideBar
-    ? {
-        className: 'main-footer',
-        style: {
-          left: `${w}px`
-        }
-      }
-    : {
-        className: 'main-footer'
-      }
+  // The footer mirrors the space layout.jsx reserves on both sides.
+  // Left: reserve while the panel is open OR pinned. A pinned left panel is
+  // always open, so this is a superset of the pin state — and it is what keeps
+  // the footer from painting over the panel, which spans bottom 0 in both
+  // states. Right: reserve only for a pinned panel, because the unpinned right
+  // panel is an overlay that stops above the footer and so never needs the
+  // space. Mobile reserves nothing on either side, matching layout.jsx, and the
+  // right panel has no pin control there at all.
+  const footerStyle = {}
+  if (openedSideBar && !isMobile) {
+    footerStyle.left = `${w}px`
+  }
+  if (rightPanelVisible && rightPanelPinned && !isMobile) {
+    footerStyle.right = `${rightPanelWidth}px`
+  }
+  const sideProps = {
+    className: 'main-footer',
+    style: footerStyle
+  }
   if (
     !inActiveTerminal
   ) {
     return (
       <div className='main-footer' {...sideProps}>
         {showSidebarIcon}
+        <QmRunInTabs store={props.store} />
+        <QmRecordStatus store={props.store} />
+        <QmPrompt store={props.store} />
       </div>
     )
   }
@@ -243,6 +281,10 @@ export default auto(function FooterEntry (props) {
         {!isAIDisabled() && renderAIIcon()}
         {renderCmdHistory()}
         {renderQuickCommands()}
+        <QmRunStatus store={props.store} />
+        <QmRunInTabs store={props.store} />
+        <QmRecordStatus store={props.store} />
+        <QmPrompt store={props.store} />
         {renderTriggers()}
         {renderBatchInputs()}
         {renderEncodingInfo()}

@@ -18,12 +18,18 @@ import {
   localAddrBookmarkLsKey,
   leftSidePanelWidthKey,
   rightSidebarWidthKey,
+  rightPanelPinnedKey,
+  cmdHistoryInRightPanelKey,
+  quickCommandsInRightPanelKey,
   addPanelWidthLsKey,
   qmSortByFrequencyKey,
+  qmGroupByLabelKey,
+  qmCollapsedLabelsKey,
   resolutionsLsKey,
   syncServerDataKey,
   splitMap,
   lastAiChatSessionIdKey,
+  aiAutoCompressLsKey,
   mobileBreakpoint
 } from '../common/constants'
 import * as ls from '../common/safe-local-storage'
@@ -94,6 +100,14 @@ export default () => {
     _batchInputSelectedTabIds: new Set(),
     aiChatHistory: [],
     agentRunning: false,
+    // ask turns and the agent loop compact their conversation when the window
+    // gets full; persisted here so the toggle survives a reload
+    // (see components/ai/ai-compress.js)
+    aiAutoCompress: ls.getItem(aiAutoCompressLsKey) === 'true',
+    // live context accounting while an agent loop is running: the agent
+    // carries tool schemas and tool results that the session history does
+    // not, so it publishes its own figure here (see components/ai/agent.js)
+    aiContextInfo: null,
     currentChatSessionId: window.localStorage.getItem(lastAiChatSessionIdKey) || '',
     showChatSessions: false,
 
@@ -125,7 +139,9 @@ export default () => {
     terminalInfoProps: {},
     rightPanelVisible: false,
     rightPanelTab: 'info',
-    rightPanelPinned: false,
+    rightPanelPinned: ls.getItem(rightPanelPinnedKey) === 'true',
+    cmdHistoryInRightPanel: ls.getItem(cmdHistoryInRightPanelKey) === 'true',
+    quickCommandsInRightPanel: ls.getItem(quickCommandsInRightPanelKey) === 'true',
     _rightPanelWidth: parseInt(ls.getItem(rightSidebarWidthKey), 10) || 500,
     showAIConfigModal: false,
 
@@ -162,10 +178,26 @@ export default () => {
 
     // quick commands
     quickCommands: [],
+    // quick commands running longer than a moment, by tab id:
+    // { name, index, total, waitFor, asking, count }
+    runningQuickCommands: {},
+    // id of the quick command waiting in the "run in terminals" picker
+    qmRunInTabsId: '',
+    // the tab being recorded into a quick command: { tabId, count }
+    qmRecording: null,
+    // recorded steps waiting in the save form
+    qmRecordedSteps: null,
+    // prompt steps waiting for an answer:
+    // { id, name, label, hidden, multi, shared, tabTitle }
+    qmPrompts: [],
     quickCommandId: '',
     openQuickCommandBar: false,
     pinnedQuickCommandBar: ls.getItem(pinnedQuickCommandBarKey) === 'y',
     qmSortByFrequency: ls.getItem(qmSortByFrequencyKey) === 'yes',
+    // label headings are opt-in: they make the panel taller, so off by default
+    qmGroupByLabel: ls.getItem(qmGroupByLabelKey) === 'yes',
+    // label headings the user folded, '' is the "No label" group
+    qmCollapsedLabels: ls.getItemJSON(qmCollapsedLabelsKey, []),
 
     // declarative auto triggers (global; bookmark/session ones live on the tab)
     triggers: [],
@@ -211,6 +243,8 @@ export default () => {
     exePath: '',
     isPortable: false,
     installSrc: '',
+    // where running widgets write their logs, from the main process
+    widgetLogPath: '',
     showSshConfigModal: false,
 
     // batch inputs
@@ -234,6 +268,9 @@ export default () => {
     widgets: [],
     widgetInstances: [],
     autoRunWidgets: [],
+    // name of the installed password manager widget, '' without one (the
+    // bookmark form shows "Ignore password manager" with one)
+    credentialProviderName: '',
     // move item
     openMoveModal: false,
     moveItem: null,

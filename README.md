@@ -5,16 +5,15 @@
 </h1>
 
 [![GitHub version](https://badgers.space/github/release/electerm/electerm?corner_radius=m)](https://github.com/electerm/electerm/releases)
-[![Build Status](https://github.com/electerm/electerm/actions/workflows/mac-test-1.yml/badge.svg)](https://github.com/electerm/electerm/actions)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/electerm/electerm/blob/master/LICENSE)
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/electerm?label=Sponsors)](https://github.com/sponsors/electerm)
 [![star](https://atomgit.com/electerm/electerm/star/badge.svg)](https://atomgit.com/electerm/electerm)
 
-[English](README.md) | [中文](build/docs/README_cn.md) | [日本語](build/docs/README_jp.md)
+[English](README.md) | [中文](src/docs/README_cn.md) | [日本語](src/docs/README_jp.md)
 
 Open-sourced terminal/ssh/sftp/telnet/serialport/RDP/VNC/Spice/ftp client(Linux, Mac, Windows, Android, HarmonyOS, iOS).
 
-Besides mainstream Windows/macOS/Linux/Android, electerm also supports HarmonyOS, iOS, and older systems — Ubuntu 18, Windows 7, macOS 10+, and special Chinese Linux distributions such as UOS, Kylin, and LoongArch (both old-world and new-world).
+Besides mainstream Windows/macOS/Linux/Android, electerm also supports HarmonyOS, iOS, and older systems — Ubuntu 18, Windows 7, macOS 10+, and special Chinese Linux distributions such as UOS, Kylin, and LoongArch (both old-world and new-world), as well as RISC-V (riscv64) and PowerPC 64-bit little-endian (ppc64le) Linux.
 
 <p>
   <a href="https://electerm.org">Homepage / Downloads</a> ·
@@ -23,7 +22,7 @@ Besides mainstream Windows/macOS/Linux/Android, electerm also supports HarmonyOS
   <a href="https://demo.electerm.org">Online demo</a> ·
   <a href="https://github.com/electerm/electerm-android">Android</a> ·
   <a href="https://github.com/electerm/electerm-harmony">HarmonyOS</a> ·
-  <a href="https://apps.apple.com/cn/app/electerm/id6792971552">Apple App Store</a> ·
+  <a href="https://apps.apple.com/us/app/electerm/id6792971552">Apple App Store</a> ·
   <a href="https://appgallery.huawei.com/app/detail?id=org.electerm.electerm">Huawei AppGallery</a> ·
   <a href="https://www.microsoft.com/store/apps/9NCN7272GTFF">Microsoft Store</a> ·
   <a href="https://snapcraft.io/electerm">Snap Store</a> ·
@@ -39,11 +38,21 @@ Besides mainstream Windows/macOS/Linux/Android, electerm also supports HarmonyOS
 
 <div align="center">
   <a href="https://www.atlascloud.ai/?ref=PCAEL2&utm_source=github&utm_medium=link&utm_campaign=electerm">
-    <img src="https://github.com/electerm/electerm-resource/blob/master/static/images/atlas-cloud.png?raw=true" alt="Atlas Cloud" height="200" />
+    <img src="https://github.com/electerm/electerm-resource/blob/master/static/images/atlas-cloud.png?raw=true" alt="Atlas Cloud" width="260" />
   </a>
 </div>
 
 [Atlas Cloud](https://www.atlascloud.ai/?ref=PCAEL2&utm_source=github&utm_medium=link&utm_campaign=electerm) provides OpenAI-compatible AI APIs and model access for AI-powered workflows in electerm.
+
+----
+
+<div align="center">
+  <a href="https://www.packyapi.ai/register?aff=DOZI">
+    <img src="https://github.com/electerm/electerm-resource/blob/master/static/images/packy-api.png?raw=true" alt="PackyCode" width="210" />
+  </a>
+</div>
+
+[PackyCode](https://www.packyapi.ai/register?aff=DOZI) — Access leading AI models through PackyCode with one API endpoint and one API key. Enjoy fast, reliable access with automatic failover and dedicated high-speed routes for Codex and Claude Code. Get started with $1 in free credits, a discount on your first top-up, and savings of up to 80% on eligible routes. Pay in RMB with no currency conversion markups or extra top-up fees.
 
 ----
 
@@ -62,18 +71,8 @@ Thanks to APIMart for sponsoring electerm! APIMart is a low-cost API platform fo
 ----
 
 <div align="center">
-  <a href="https://www.apismart.ai">
-    <img src="https://github.com/electerm/electerm-resource/blob/master/static/images/apismart400x400.png?raw=true" alt="ApiSmart" width="200" />
-  </a>
-</div>
 
-[ApiSmart](https://www.apismart.ai) provides unified access to leading AI models through a single API. Use one API key to connect with LLM, image, and video models through an OpenAI-compatible interface, without managing multiple providers separately. Switch models easily, simplify billing, and improve reliability with intelligent routing and automatic failover. Build and scale AI applications faster with one streamlined API platform.
-
-----
-
-<div align="center">
-
-<a href="https://www.digitalocean.com/?refcode=c10bcb28b846&utm_campaign=Referral_Invite&utm_medium=Referral_Program&utm_source=badge"><img align="middle" src="https://web-platforms.sfo2.cdn.digitaloceanspaces.com/WWW/Badge%202.svg" alt="DigitalOcean Referral Badge" /></a>&nbsp;&nbsp;&nbsp;<a href="https://oss-directory.vercel.app"><img align="middle" src="https://github.com/electerm/electerm-resource/blob/master/static/images/vercel-oss-2005.png?raw=true" alt="Vercel OSS Program" /></a>
+<a href="https://www.infistar.cc/register?aff=4R4JT29X&ref_source=link"><img align="middle" src="https://github.com/electerm/electerm-resource/blob/master/static/images/infistar-wordmark.png?raw=true" alt="Infistar" height="40" /></a>&nbsp;&nbsp;&nbsp;<a href="https://www.digitalocean.com/?refcode=c10bcb28b846&utm_campaign=Referral_Invite&utm_medium=Referral_Program&utm_source=badge"><img align="middle" src="https://web-platforms.sfo2.cdn.digitaloceanspaces.com/WWW/Badge%202.svg" alt="DigitalOcean Referral Badge" /></a>
 
 </div>
 
@@ -84,7 +83,7 @@ Thanks to APIMart for sponsoring electerm! APIMart is a low-cost API platform fo
 ## Features
 
 - Works as a terminal/file manager, ssh/sftp/ftp/telnet/serialport/RDP/VNC/Spice client
-- Support Window 7+(X64/ARM64), HarmonyOS，Android, iOS, Mac OS 10.15+(x64/arm64), Linux(x64/arm64/Loong64 new world & old world), even old Linux with glibc 2.17+ like UOS/Kylin/Ubuntu 18.04 etc
+- Support Window 7+(X64/ARM64), HarmonyOS，Android, iOS, Mac OS 10.15+(x64/arm64), Linux(x64/arm64/riscv64/ppc64le/Loong64 new world & old world), even old Linux with glibc 2.17+ like UOS/Kylin/Ubuntu 18.04 etc
 - Global hotkey to toggle window visibility (similar to guake, default is `ctrl + 2`)
 - 🇺🇸 🇨🇳 🇧🇷 🇷🇺 🇪🇸 🇫🇷 🇹🇷 🇭🇰 🇯🇵 🇸🇦 🇩🇪 🇰🇷 🇮🇩 🇵🇱 Multi-language support([electerm-locales](https://github.com/electerm/electerm-locales), contributions/fixes welcome)
 - Double click to directly edit (small) remote files.
@@ -150,7 +149,9 @@ npm i -g electerm
 
 [Discussion board](https://github.com/electerm/electerm/discussions)
 
-![electerm-wechat-group-qr.jpg](https://electerm.org/electerm-wechat-group-qr.jpg)
+<img src="https://electerm.org/electerm-wechat-group-qr.jpg" width="300" alt="electerm WeChat group QR code">
+
+<img src="https://electerm.org/telegram-qr.png" width="300" alt="electerm Telegram group QR code">
 
 ## Support
 
@@ -206,7 +207,7 @@ npm run fix
 ```bash
 npm run b
 npm run prepare-test
-cp ./build/.sample.env ./.env
+cp ./src/build/.sample.env ./.env
 
 # edit .env, fill your test host/username/password, may only works in mac OS
 npm run test

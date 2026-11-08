@@ -2,19 +2,30 @@
 
 const fs = require('fs')
 const path = require('path')
+const widgetLog = require('./instance-log')
+const {
+  listUserWidgets,
+  resolveUserWidgetEntry,
+  isUserWidget,
+  importWidget,
+  importWidgetFromSource,
+  removeUserWidget,
+  getUserWidgetDir
+} = require('./user-widget')
+const { isValidWidgetId } = require('./paths')
+const { sanitizeAIConfig } = require('./ai-config')
 // const log = require('../common/log')
 
 // Store running widget instances
 const runningInstances = new Map()
-const widgetIdPattern = /^[a-z0-9-]+$/
 
-function resolveWidgetPath (widgetId, widgetDirectory = __dirname) {
-  if (typeof widgetId !== 'string' || !widgetIdPattern.test(widgetId)) {
+function resolveBuiltinPath (widgetId) {
+  if (!isValidWidgetId(widgetId)) {
     throw new Error(`Invalid widget ID: ${widgetId}`)
   }
 
-  const widgetPath = path.resolve(widgetDirectory, `widget-${widgetId}.js`)
-  const relativePath = path.relative(widgetDirectory, widgetPath)
+  const widgetPath = path.resolve(__dirname, `widget-${widgetId}.js`)
+  const relativePath = path.relative(__dirname, widgetPath)
 
   if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
     throw new Error(`Invalid widget ID: ${widgetId}`)
@@ -29,9 +40,21 @@ function listWidgetsFromFolder (widgetDirectory = __dirname) {
   for (const file of widgetFiles) {
     try {
       const widgetModule = require(path.join(widgetDirectory, file))
+      // a file matching widget-*.js is a widget by convention; anything else
+      // living in this folder (a helper module) must not reach the renderer,
+      // where an undefined `info` crashes the whole widget list
+      if (!widgetModule.widgetInfo) {
+        console.error(`Skipping ${file}: no widgetInfo export`)
+        continue
+      }
       res.push({
-        id: file.slice(7, -3),
-        info: widgetModule.widgetInfo
+        id: file.slice(7, -3), // "widget-".length = 7, ".js" = 3
+        builtin: true,
+        state: 'ok',
+        info: {
+          ...widgetModule.widgetInfo,
+          builtin: true
+        }
       })
     } catch (error) {
       console.error(`Error loading widget from file ${file}:`, error)
@@ -41,33 +64,62 @@ function listWidgetsFromFolder (widgetDirectory = __dirname) {
   return res
 }
 
+/**
+ * Built-ins ship with the app; user widgets live in <data dir>/widgets/<id>/.
+ *
+ * One namespace, no shadowing: a user folder that reuses a built-in id is
+ * ignored, and the built-in carries a warning the list can show. Silently
+ * letting a user widget replace mcp-server or ssh-server would break features
+ * that have nothing to do with the widget panel.
+ */
 function listWidgets () {
-  const widgets1 = listWidgetsFromFolder()
-  return widgets1
-  // if (process.versions.electron === undefined) {
-  //   return widgets1
-  // }
-  // const {
-  //   appPath
-  // } = require('../common/app-props')
-  // const userWidgetsDir = path.resolve(
-  //   appPath, 'widgets'
-  // )
-  // // Ensure user widgets directory exists when app starts
-  // try {
-  //   if (!fs.existsSync(userWidgetsDir)) {
-  //     fs.mkdirSync(userWidgetsDir, { recursive: true })
-  //   }
-  // } catch (err) {
-  //   log.error(`Failed to create user widgets directory ${userWidgetsDir}:`, err)
-  // }
-  // const widgets2 = listWidgetsFromFolder(
-  //   userWidgetsDir
-  // )
-  // return [
-  //   ...widgets1,
-  //   ...widgets2
-  // ]
+  const widgets = listWidgetsFromFolder()
+  const builtinIds = new Set(widgets.map(w => w.id))
+  const userWidgets = listUserWidgets()
+  for (const widget of userWidgets) {
+    if (builtinIds.has(widget.id)) {
+      const builtin = widgets.find(w => w.id === widget.id)
+      builtin.warning = `User widget "${widget.id}" in ${getUserWidgetDir()} is ignored: the id belongs to a built-in widget`
+      continue
+    }
+    widgets.push(widget)
+  }
+  return widgets
+}
+
+// Where the entry of one widget lives, whichever root it came from.
+function resolveWidgetModule (widgetId) {
+  if (!isValidWidgetId(widgetId)) {
+    throw new Error(`Invalid widget ID: ${widgetId}`)
+  }
+  const builtinPath = resolveBuiltinPath(widgetId)
+  if (fs.existsSync(builtinPath)) {
+    return { entry: builtinPath, builtin: true }
+  }
+  if (isUserWidget(widgetId)) {
+    return { entry: resolveUserWidgetEntry(widgetId), builtin: false }
+  }
+  throw new Error(`Widget not found: ${widgetId}`)
+}
+
+// Metadata for one widget: the manifest for a user widget (the package.json is
+// the source of truth), the widgetInfo export for a built-in.
+function getWidgetInfo (widgetId) {
+  const { entry, builtin } = resolveWidgetModule(widgetId)
+  if (builtin) {
+    const widgetModule = require(entry)
+    if (!widgetModule.widgetInfo) {
+      throw new Error(`Widget ${widgetId} has no widgetInfo export`)
+    }
+    return widgetModule.widgetInfo
+  }
+  const entryInfo = listUserWidgets().find(w => w.id === widgetId)
+  if (!entryInfo || entryInfo.state !== 'ok') {
+    throw new Error(entryInfo && entryInfo.error
+      ? `Widget ${widgetId} is not usable: ${entryInfo.error}`
+      : `Widget ${widgetId} not found`)
+  }
+  return entryInfo.info
 }
 
 function hasRunningInstance (widgetId) {
@@ -79,12 +131,23 @@ function hasRunningInstance (widgetId) {
   return false
 }
 
-function runWidget (widgetId, config) {
-  const widget = require(resolveWidgetPath(widgetId))
+async function runWidget (widgetId, config) {
+  const { entry } = resolveWidgetModule(widgetId)
+  const widget = require(entry)
+  const info = getWidgetInfo(widgetId)
+  const { type, singleInstance } = info
 
-  const { type, singleInstance } = widget.widgetInfo
   if (type !== 'instance') {
+    // A UI-only widget (frontend) has nothing to start: the panel is its
+    // renderer. No widgetRun is not an error there.
+    if (typeof widget.widgetRun !== 'function') {
+      return { success: true }
+    }
     return widget.widgetRun(config)
+  }
+
+  if (typeof widget.widgetRun !== 'function') {
+    throw new Error(`Widget ${widgetId} has no widgetRun export`)
   }
 
   // Check if singleInstance widget already has a running instance
@@ -92,23 +155,92 @@ function runWidget (widgetId, config) {
     return Promise.reject(new Error(`Widget ${widgetId} already has a running instance. Only one instance is allowed.`))
   }
 
-  const instance = widget.widgetRun(config)
+  // The widget reports through this context; it is handed the instance log
+  // before it knows its own instanceId (see instance-log.js createContext).
+  const ctx = widgetLog.createContext()
+  const instance = widget.widgetRun(config, ctx)
   instance.widgetId = widgetId
   runningInstances.set(instance.instanceId, instance)
+  ctx.bind(instance.instanceId)
+
+  const logger = widgetLog.loggerFor(instance.instanceId)
+  logger.log('info', `Starting ${info.name} (${widgetId})`)
 
   return instance.start()
     .then((result) => {
+      logger.log('info', result && result.msg ? result.msg : 'Started')
       return {
         instanceId: instance.instanceId,
         widgetId,
         singleInstance: !!singleInstance,
-        ...result
+        ...result,
+        // A widget may offer an AI config for the user to apply; it is
+        // sanitised here, on the way out of the main process, so the renderer
+        // only ever sees the whitelisted fields (see ./ai-config.js).
+        aiConfig: sanitizeAIConfig(result && result.aiConfig)
       }
     })
     .catch((err) => {
+      // kept in the log file on purpose: this is what the user opens the panel
+      // to read when the widget refuses to start
+      logger.log('error', `Failed to start: ${err && err.message ? err.message : err}`)
       runningInstances.delete(instance.instanceId)
       return instance.stop().catch(() => {}).then(() => { throw err })
     })
+}
+
+/**
+ * Call an exported function on a widget's main-process module.
+ *
+ * This is what a custom widget UI talks to: for `frontend` widgets there is no
+ * instance to call methods on (runWidgetFunc needs one), and patching ipc.js is
+ * not an option for code that ships after the app does. Only own properties are
+ * reachable, the same rule the ipc bridge itself follows.
+ */
+async function callWidgetFunc (widgetId, funcName, ...args) {
+  const { entry } = resolveWidgetModule(widgetId)
+  const widget = require(entry)
+  if (
+    typeof funcName !== 'string' ||
+    !Object.prototype.hasOwnProperty.call(widget, funcName) ||
+    typeof widget[funcName] !== 'function'
+  ) {
+    throw new Error(`Widget ${widgetId} does not export the function ${funcName}`)
+  }
+  const result = await widget[funcName](...args)
+  // same offer as a run result, same sanitising (see ./ai-config.js)
+  if (
+    result &&
+    typeof result === 'object' &&
+    !Array.isArray(result) &&
+    Object.prototype.hasOwnProperty.call(result, 'aiConfig')
+  ) {
+    return { ...result, aiConfig: sanitizeAIConfig(result.aiConfig) }
+  }
+  return result
+}
+
+// Install: copy a whole widget folder into <data dir>/widgets/<id>/
+function importWidgetFolder (srcDir, overwrite) {
+  return importWidget(srcDir, overwrite)
+}
+
+// Install from a git host: `owner/repo`, a GitHub/AtomGit URL, `owner/repo#ref`
+// or a folder inside the repo (see ./widget-source.js)
+function importWidgetFromUrl (input, overwrite) {
+  return importWidgetFromSource(input, overwrite)
+}
+
+// Uninstall: stop whatever it is running, then delete the folder.
+async function deleteWidget (widgetId) {
+  const stops = []
+  for (const [instanceId, instance] of runningInstances) {
+    if (instance.widgetId === widgetId) {
+      stops.push(stopWidget(instanceId).catch(() => {}))
+    }
+  }
+  await Promise.allSettled(stops)
+  return removeUserWidget(widgetId)
 }
 
 function stopWidget (instanceId) {
@@ -118,10 +250,18 @@ function stopWidget (instanceId) {
     return
   }
 
+  const logger = widgetLog.loggerFor(instanceId)
+  logger.log('info', 'Stopping...')
+
   return instance.stop()
     .then(() => {
+      logger.log('info', 'Stopped')
       runningInstances.delete(instanceId)
       return { instanceId, status: 'stopped' }
+    })
+    .catch((err) => {
+      logger.log('error', `Failed to stop: ${err && err.message ? err.message : err}`)
+      throw err
     })
 }
 
@@ -140,6 +280,7 @@ async function runWidgetFunc (instanceId, funcName, ...args) {
     return result
   } catch (error) {
     console.error(`Error executing ${funcName} on widget instance ${instanceId}:`, error)
+    widgetLog.loggerFor(instanceId).log('error', `${funcName} failed: ${error.message}`)
     throw error
   }
 }
@@ -191,5 +332,10 @@ module.exports = {
   listWidgets,
   runWidget,
   stopWidget,
-  runWidgetFunc
+  runWidgetFunc,
+  callWidgetFunc,
+  importWidget: importWidgetFolder,
+  importWidgetFromSource: importWidgetFromUrl,
+  deleteWidget,
+  resolveWidgetModule
 }

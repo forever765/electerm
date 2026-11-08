@@ -18,7 +18,10 @@ import {
   Tooltip
 } from 'antd'
 import * as ls from '../../common/safe-local-storage'
-import scanCode from './code-scan'
+import { isMac } from '../../common/platform'
+import { getScancode } from './code-scan'
+import { getRDCleanPathDetails, rdCleanPathText, negotiationText } from './rdp-errors'
+import { logonSettings } from './rdp-logon'
 import resolutions from './resolutions'
 import { readClipboardAsync } from '../../common/clipboard'
 import RemoteFloatControl from '../common/remote-float-control'
@@ -28,6 +31,8 @@ import SwitchLabel from '../common/switch'
 import HelpIcon from '../common/help-icon'
 import Modal from '../common/modal'
 import RdpCredForm from './rdp-cred-form'
+import { credentialsFromProvider, connectedToProvider } from '../../common/credential-provider.jsx'
+import { credentialOptions } from '../../common/credential-provider-utils.js'
 import { FileTransferManager, createFileLogger } from './file-transfer'
 import { notification } from '../common/notification'
 import message from '../common/message'
@@ -35,6 +40,17 @@ import ShowItem from '../common/show-item'
 import './rdp.styl'
 
 const { Option } = Select
+
+// Whether the server paints the mouse cursor into the bitmap stream.
+// false: the cursor is drawn locally (a CSS cursor on the canvas), so it moves
+// at local input rate instead of waiting for pointer updates to come back
+// through the graphics pipeline - which is the first thing that looks frozen
+// on a busy remote desktop. The cost is that the cursor no longer changes
+// shape per context (I-beam over text, resize handles, ...).
+const ENABLE_SERVER_POINTER = false
+
+// remembered per host, like the resolution and scale-viewport switches
+const swapCtrlCmdLsKey = host => `rdp-swap-ctrl-cmd-${host}`
 
 async function loadWasmModule () {
   if (window.ironRdp) return
@@ -61,11 +77,13 @@ export default class RdpSession extends PureComponent {
     const resObj = ls.getItemJSON(id, resolutions[1])
     const scaleViewportId = `rdp-scale-view-${props.tab.host}`
     const scaleViewport = ls.getItemJSON(scaleViewportId, false)
+    const swapCtrlCmd = ls.getItemJSON(swapCtrlCmdLsKey(props.tab.host), false)
     super(props)
     this.canvasRef = createRef()
     this.state = {
       loading: false,
       scaleViewport,
+      swapCtrlCmd,
       ...resObj,
       hasRemoteFiles: false,
       downloadBtnDisabled: true,
@@ -76,6 +94,8 @@ export default class RdpSession extends PureComponent {
     this.fileTransfer = null
     this.fileUploadInProgress = false
     this.log = createFileLogger()
+    // what the main process currently believes; see syncMenuShortcuts
+    this._menuShortcutsIgnored = false
   }
 
   componentDidMount () {
@@ -87,6 +107,8 @@ export default class RdpSession extends PureComponent {
   }
 
   cleanup = () => {
+    // a closed/reloaded tab must not leave the app menu ignoring its shortcuts
+    this.setMenuShortcutsIgnored(false)
     if (this.session) {
       try {
         this.session.shutdown()
@@ -132,6 +154,9 @@ export default class RdpSession extends PureComponent {
     return `ws://${host}:${port}/${type}/${id}?token=${tokenElecterm}${extra}`
   }
 
+  /**
+   * @param {object} [credOverride] user name and password from the form
+   */
   remoteInit = async (credOverride) => {
     this.setState({
       loading: true
@@ -142,9 +167,16 @@ export default class RdpSession extends PureComponent {
       ...window.store.applyProfile(deepCopy(this.props.tab || {})),
       ...credOverride
     }
+    // a bookmark that asks a password manager for its password, when it has
+    // none saved (without NLA only the user name is used, see rdp-logon.js)
+    if (!credOverride) {
+      this.credentials = await credentialsFromProvider(tab)
+      Object.assign(tab, credentialOptions(this.credentials, 'rdp'))
+    }
     // keep resolved credentials for the connect-time prompt
     this.tab = tab
-    if (!tab.username) {
+    // a new entry: ask for user name and password first
+    if (!tab.username || (!credOverride && this.credentials?.newEntry)) {
       this.setState({
         loading: false,
         showCredPrompt: true
@@ -195,6 +227,8 @@ export default class RdpSession extends PureComponent {
 
     this.setStatus(statusMap.success)
 
+    const mode = logonSettings(tab)
+
     try {
       const canvas = this.canvasRef.current
       if (!canvas) {
@@ -207,10 +241,16 @@ export default class RdpSession extends PureComponent {
       const rdpPort = tab.port || 3389
       const destination = `${rdpHost}:${rdpPort}`
       const username = tab.username || ''
-      const password = tab.password || ''
+      const { password } = mode
 
       const desktopSize = new window.ironRdp.DesktopSize(width, height)
-      const enableCredsspExt = new window.ironRdp.Extension('enable_credssp', true)
+      // NLA only when the bookmark asks for it; without it the server is not
+      // authenticated, so logonSettings drops the password (rdp-logon.js)
+      this.nla = mode.nla
+      const enableCredsspExt = new window.ironRdp.Extension('enable_credssp', mode.nla)
+      // Unknown extensions are ignored by older wasm builds, so this is safe to
+      // pass unconditionally.
+      const pointerExt = new window.ironRdp.Extension('enable_server_pointer', ENABLE_SERVER_POINTER)
 
       const builder = new window.ironRdp.SessionBuilder()
       builder.username(username)
@@ -224,6 +264,7 @@ export default class RdpSession extends PureComponent {
       builder.desktopSize(desktopSize)
       builder.renderCanvas(canvas)
       builder.extension(enableCredsspExt)
+      builder.extension(pointerExt)
 
       this.fileTransfer = new FileTransferManager(
         () => this.session,
@@ -287,6 +328,14 @@ export default class RdpSession extends PureComponent {
       })
 
       this.session = await builder.connect()
+      // logged on with a password typed in the form: save or offer it; only
+      // NLA proves it, without NLA it is not even sent
+      if (credOverride?.password && mode.nla) {
+        connectedToProvider(tab, this.credentials, {
+          username: tab.username,
+          password: credOverride.password
+        })
+      }
 
       const ds = this.session.desktopSize()
 
@@ -353,13 +402,22 @@ export default class RdpSession extends PureComponent {
     if (this.isAuthError(err)) {
       return window.translate('loginFail') + ` (${this.formatError(err)})`
     }
-    return this.formatError(err)
+    const { host, port = 3389 } = this.props.tab || {}
+    return rdCleanPathText(getRDCleanPathDetails(err), host, port) ||
+      negotiationText(err, this.nla !== false) ||
+      this.formatError(err)
   }
 
+  // stays until closed: a connect can fail after a 20s timeout, when
+  // nobody looks at a toast any more
   showError = (err) => {
     const text = this.errText(err)
     this.log(`Connection failed: ${this.formatError(err)}`, 'error')
-    message.error(text, 10)
+    notification.error({
+      message: `RDP: ${this.props.tab?.title || this.props.tab?.host || ''}`,
+      description: text,
+      duration: 0
+    })
   }
 
   onCredSubmit = (res) => {
@@ -462,29 +520,56 @@ export default class RdpSession extends PureComponent {
       }
     })
 
-    canvas.addEventListener('mousemove', (e) => {
-      if (!this.session) return
+    // Coalesce mouse moves to at most one per animation frame. A high polling
+    // rate mouse otherwise produces far more input transactions than the
+    // session loop can drain, and every one of them competes with the frames
+    // coming back from the server.
+    let pendingMousePos = null
+    let mouseRafId = null
+
+    const flushMouseMove = () => {
+      mouseRafId = null
+      const pos = pendingMousePos
+      pendingMousePos = null
+      if (!pos || !this.session) return
       try {
-        // the canvas is rendered with object-fit: contain, so the pointer has
-        // to be mapped through the real surface rect (see remote-pointer.js)
-        const { x, y } = eventToRemotePos(
-          e,
-          canvas,
-          canvas.width,
-          canvas.height
-        )
-        const event = window.ironRdp.DeviceEvent.mouseMove(x, y)
+        const event = window.ironRdp.DeviceEvent.mouseMove(pos.x, pos.y)
         const tx = new window.ironRdp.InputTransaction()
         tx.addEvent(event)
         this.session.applyInputs(tx)
       } catch (err) {
         // suppress frequent mouse errors
       }
+    }
+
+    // A click must land where the user actually is, not at the last frame's
+    // position.
+    const flushMouseMoveNow = () => {
+      if (mouseRafId !== null) {
+        window.cancelAnimationFrame(mouseRafId)
+        flushMouseMove()
+      }
+    }
+
+    canvas.addEventListener('mousemove', (e) => {
+      if (!this.session) return
+      // the canvas is rendered with object-fit: contain, so the pointer has
+      // to be mapped through the real surface rect (see remote-pointer.js)
+      pendingMousePos = eventToRemotePos(
+        e,
+        canvas,
+        canvas.width,
+        canvas.height
+      )
+      if (mouseRafId === null) {
+        mouseRafId = window.requestAnimationFrame(flushMouseMove)
+      }
     })
 
     canvas.addEventListener('mousedown', (e) => {
       e.preventDefault()
       canvas.focus()
+      flushMouseMoveNow()
       if (!this.session) return
       try {
         const event = window.ironRdp.DeviceEvent.mouseButtonPressed(e.button)
@@ -498,6 +583,7 @@ export default class RdpSession extends PureComponent {
 
     canvas.addEventListener('mouseup', (e) => {
       e.preventDefault()
+      flushMouseMoveNow()
       if (!this.session) return
       try {
         const event = window.ironRdp.DeviceEvent.mouseButtonReleased(e.button)
@@ -540,13 +626,52 @@ export default class RdpSession extends PureComponent {
     })
 
     canvas.addEventListener('focus', () => {
+      this.syncMenuShortcuts()
       this.syncLocalToRemote()
+    })
+
+    canvas.addEventListener('blur', () => {
+      this.syncMenuShortcuts()
     })
   }
 
   getScancode = (code) => {
-    const sc = scanCode({ code })
+    const sc = getScancode(code, this.state.swapCtrlCmd)
     return sc !== undefined ? sc : null
+  }
+
+  // A registered menu accelerator is consumed by AppKit before the page ever
+  // sees the keydown, so with the swap on Cmd+C/V/A/Z/X would still run the
+  // local Edit menu instead of reaching the remote as Ctrl+C/V/A/Z/X. While -
+  // and only while - the swapped canvas holds focus, tell the main process to
+  // stop honouring the app menu's shortcuts.
+  setMenuShortcutsIgnored = (active) => {
+    if (active === this._menuShortcutsIgnored) return
+    this._menuShortcutsIgnored = active
+    try {
+      // the web client has no app menu, and older bridges do not know the call
+      window.pre.runGlobalAsync('setRdpSwapCtrlCmd', active).catch(() => {})
+    } catch (e) { }
+  }
+
+  syncMenuShortcuts = () => {
+    const canvas = this.canvasRef.current
+    this.setMenuShortcutsIgnored(
+      isMac &&
+      !!this.state.swapCtrlCmd &&
+      !!canvas &&
+      document.activeElement === canvas
+    )
+  }
+
+  handleSwapCtrlCmdChange = (v) => {
+    ls.setItemJSON(swapCtrlCmdLsKey(this.props.tab.host), v)
+    this.setState({ swapCtrlCmd: v }, () => {
+      // clicking the switch took focus away from the canvas; give it back so
+      // the swap is usable immediately
+      this.canvasRef.current?.focus()
+      this.syncMenuShortcuts()
+    })
   }
 
   handleEditResolutions = () => {
@@ -713,6 +838,16 @@ export default class RdpSession extends PureComponent {
       label: window.translate('scaleViewport'),
       className: 'mg1l'
     }
+    // macOS only: swapping Ctrl/Command is meaningless on a Mac host, and the
+    // remote has to be Windows for the Win key to be the other half of the swap.
+    // The label is a literal glyph pair, not a translated string: "ctrl <-> cmd"
+    // reads the same in every language and needs no locale slot.
+    const swapProps = {
+      checked: !!this.state.swapCtrlCmd,
+      onChange: this.handleSwapCtrlCmdChange,
+      label: 'ctrl ⇄ cmd',
+      className: 'mg1l'
+    }
     const uploadTitle = window.translate('upload') || 'Upload files to remote'
     const downloadTitle = window.translate('download') || 'Download files from remote'
     return (
@@ -746,6 +881,11 @@ export default class RdpSession extends PureComponent {
         <SwitchLabel
           {...scaleProps}
         />
+        {
+          isMac
+            ? <SwitchLabel {...swapProps} />
+            : null
+        }
         <Tooltip title={uploadTitle}>
           <UploadOutlined
             onClick={this.handleUploadButtonClick}

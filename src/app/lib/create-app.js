@@ -11,13 +11,18 @@ const { getUserConfigNoEnc, getDbConfig } = require('./get-config')
 const {
   setupDeepLinkHandlers
 } = require('./deep-link')
+const { setupVvFileHandlers, openVvFileFromOs } = require('./vv-file-open')
+const { findVvFile } = require('../common/vv-file')
 const { handleSingleInstance } = require('./single-instance')
 const { setupCrashReporter, setupCommandLineSwitches } = require('./crash-reporter')
-const { precheckFonts } = require('./font-check')
+const { registerWidgetScheme, initWidgetProtocol } = require('../widgets/protocol')
 
 let conf = {}
 
 setupCrashReporter()
+// electerm-widget://<id>/ — the scheme a user widget's own UI is served from.
+// Privileged-scheme registration only takes effect before the app is ready.
+registerWidgetScheme()
 
 exports.createApp = async function () {
   app.setName(packInfo.name)
@@ -36,6 +41,9 @@ exports.createApp = async function () {
 
   // Setup deep link handlers (open-url for macOS, etc.)
   setupDeepLinkHandlers()
+  // .vv files handed over by the OS. Before whenReady(): macOS can deliver
+  // 'open-file' during launch, and an event with no listener is dropped.
+  setupVvFileHandlers()
   // Only request single instance lock if multi-instance is not allowed
   if (!allowMultiInstance) {
     // Use socket-based single instance lock for compatibility with Electron 22
@@ -57,6 +65,19 @@ exports.createApp = async function () {
       createWindow(conf)
       return
     }
+    // A .vv handed to an ALREADY RUNNING electerm. Windows has no 'open-file'
+    // event: the association launches a second process with the path in argv,
+    // which arrives here. Without this the file is silently dropped and the
+    // window just comes to the front -- which is what a user double-clicking a
+    // .vv in the Proxmox UI sees as "it does not work".
+    //
+    // The socket path above (single-instance.js) already forwards the same
+    // payload; this is the fallback for when only Electron's own lock fired.
+    const vvFile = findVvFile(commandLine)
+    if (vvFile) {
+      openVvFileFromOs(vvFile)
+      return
+    }
     const win = globalState.get('win')
     if (win) {
       if (win.isMinimized()) {
@@ -66,10 +87,8 @@ exports.createApp = async function () {
     }
   })
   app.whenReady().then(async () => {
-    // Linux only, and it overlaps with loading the config rather than
-    // delaying the first window (see font-check.js).
-    precheckFonts()
     conf = await getDbConfig()
+    initWidgetProtocol()
     createWindow(conf)
   })
   app.on('activate', () => {

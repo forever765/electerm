@@ -1,8 +1,12 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import { Flex, Input, Segmented, Button, Tag, message } from 'antd'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
+import { Flex, Input, Segmented, Button, Tag, message, Popover } from 'antd'
 import TabSelect from '../footer/tab-select'
 import AiChatHistory from './ai-chat-history'
 import AiChatSessions from './ai-chat-sessions'
+import AiContextIndicator from './ai-context-indicator'
+import SwitchLabel from '../common/switch'
+import { buildSessionMessages, summarizeContext, getUsageLevel } from './ai-context'
+import { appendMandatoryGuardrails } from './ai-guardrails'
 import uid from '../../common/uid'
 import { pick } from 'lodash-es'
 import {
@@ -39,6 +43,7 @@ export default function AIChat (props) {
   const fileInputRef = useRef(null)
   const [mode, setMode] = useState(() => getItem(aiChatModeLsKey) || 'ask')
   const isAgent = mode === 'agent'
+  const autoCompress = !!props.aiAutoCompress
   const submitDisabled = isAgent && props.agentRunning
 
   const currentChatSessionId = props.currentChatSessionId || ''
@@ -49,9 +54,60 @@ export default function AIChat (props) {
     }
   }, [currentChatSessionId, props.rightPanelTab])
 
-  const sessionHistory = (props.aiChatHistory || []).filter(
-    h => h.chatSessionId === currentChatSessionId
+  // Memoized on purpose: `prompt` lives in this component's state, so every
+  // keystroke re-renders it. `AIChatHistory` is memo()'d, and a fresh array on
+  // each keystroke defeated that -- which also meant its scroll-to-bottom
+  // layout effect re-ran while typing, yanking the view down mid-scroll.
+  // Entries are updated immutably, so a new array identity really does mean
+  // the transcript changed.
+  const sessionHistory = useMemo(
+    () => (props.aiChatHistory || []).filter(
+      h => h.chatSessionId === currentChatSessionId
+    ),
+    [props.aiChatHistory, currentChatSessionId]
   )
+
+  const config = props.config || {}
+
+  // Size of the context the *next* message will carry: every entry of this
+  // session, from the last compression onwards, built by the same helper the
+  // sender uses. While an agent loop is running its own, much larger, figure
+  // is published to the store (tool schemas and tool results included) and
+  // takes precedence.
+  const sessionContextInfo = useMemo(() => {
+    if (!currentChatSessionId) {
+      return null
+    }
+    const lang = config.languageAI || window.store.getLangName()
+    const role = appendMandatoryGuardrails(
+      (config.roleAI || '') + `;用[${lang}]回复`
+    )
+    const messages = buildSessionMessages({
+      history: props.aiChatHistory,
+      chatSessionId: currentChatSessionId,
+      role
+    })
+    if (!messages || messages.length < 2) {
+      return null
+    }
+    return summarizeContext(messages, {
+      model: config.modelAI,
+      contextLength: config.contextLengthAI
+    })
+  }, [
+    props.aiChatHistory,
+    // length as well as identity: sending a message pushes onto the existing
+    // array, so the reference alone would not change
+    props.aiChatHistory.length,
+    currentChatSessionId,
+    config.roleAI,
+    config.languageAI,
+    config.modelAI,
+    config.contextLengthAI
+  ])
+
+  const contextInfo = props.aiContextInfo || sessionContextInfo
+  const contextLevel = getUsageLevel(contextInfo && contextInfo.percent)
 
   function handlePromptChange (e) {
     setPrompt(e.target.value)
@@ -99,6 +155,12 @@ export default function AIChat (props) {
     if (window.store.aiConfigMissing()) {
       window.store.toggleAIConfig()
     }
+    // Read the live flag rather than the rendered one. `submitDisabled` can be
+    // stale: the loop sets `agentRunning` from the new turn's mount effect, and
+    // manate's `auto` re-subscribes its listener on every render, so a write
+    // landing in that window never reaches the panel -- leaving the icon looking
+    // enabled while a run is in flight, which let a second agent turn through.
+    if (isAgent && window.store.agentRunning) return
     if (!prompt.trim() && !attachments.length) return
 
     const chatId = uid()
@@ -134,12 +196,14 @@ export default function AIChat (props) {
       id: chatId
     }
 
-    window.store.aiChatHistory.push(chatEntry)
+    // Reassign rather than push: the store only notifies on a property write,
+    // and the transcript is keyed off the array identity.
+    window.store.aiChatHistory = [...window.store.aiChatHistory, chatEntry]
     setPrompt('')
     setAttachments([])
 
     if (window.store.aiChatHistory.length > MAX_HISTORY) {
-      window.store.aiChatHistory.splice(MAX_HISTORY)
+      window.store.aiChatHistory = window.store.aiChatHistory.slice(0, MAX_HISTORY)
     }
   }, [prompt, attachments, mode, currentChatSessionId])
 
@@ -177,6 +241,41 @@ export default function AIChat (props) {
     } finally {
       setCompressing(false)
     }
+  }
+
+  function handleAutoCompressChange (val) {
+    window.store.setAiAutoCompress(val)
+  }
+
+  // The toolbar button is the auto compress button: the popover behind it holds
+  // the persistent toggle plus the manual compress action, so one button covers
+  // both "keep this session small for me" and "compact it right now".
+  function renderAutoCompressPopover () {
+    return (
+      <div className='ai-auto-compress-popover'>
+        <Flex align='center' justify='space-between' gap={12}>
+          <span className='ai-auto-compress-label'>{e('autoCompress')}</span>
+          <SwitchLabel
+            checked={autoCompress}
+            onChange={handleAutoCompressChange}
+            size='small'
+          />
+        </Flex>
+        <hr />
+        <Flex vertical gap={4} align='flex-start'>
+          <Button
+            size='small'
+            icon={<CompressOutlined />}
+            onClick={handleCompressSession}
+            loading={compressing}
+            disabled={sessionHistory.length < 2}
+            type={contextLevel === 'warn' || contextLevel === 'danger' ? 'primary' : 'default'}
+          >
+            {e('compress')}
+          </Button>
+        </Flex>
+      </div>
+    )
   }
 
   function handleShowHistory () {
@@ -259,34 +358,40 @@ export default function AIChat (props) {
       </Flex>
 
       <Flex vertical className='ai-chat-input'>
-        <Flex className='ai-chat-toolbar mg1b' align='left' gap={4}>
-          <Button
-            size='small'
-            icon={<PlusOutlined />}
-            onClick={handleNewChat}
-            className='mg1r new-chat-btn'
-          >
-            {e('new')}
-          </Button>
-          {sessionHistory.length >= 2 && (
+        <Flex className='ai-chat-toolbar mg1b' align='center' justify='space-between' gap={4}>
+          <Flex align='center' gap={4}>
             <Button
               size='small'
-              icon={<CompressOutlined />}
-              onClick={handleCompressSession}
-              loading={compressing}
-              className='mg1r'
+              icon={<PlusOutlined />}
+              onClick={handleNewChat}
+              className='new-chat-btn'
             >
-              {e('compress')}
+              {e('new')}
             </Button>
-          )}
-          <Button
-            size='small'
-            icon={<HistoryOutlined />}
-            onClick={handleShowHistory}
-            type={props.showChatSessions ? 'primary' : 'default'}
-          >
-            {e('history')}
-          </Button>
+            <Popover
+              content={renderAutoCompressPopover()}
+              trigger='click'
+              placement='topLeft'
+            >
+              <Button
+                size='small'
+                icon={<CompressOutlined />}
+                type={autoCompress ? 'primary' : 'default'}
+                danger={!autoCompress && contextLevel === 'danger'}
+              >
+                {e('autoCompress')}
+              </Button>
+            </Popover>
+            <Button
+              size='small'
+              icon={<HistoryOutlined />}
+              onClick={handleShowHistory}
+              type={props.showChatSessions ? 'primary' : 'default'}
+            >
+              {e('history')}
+            </Button>
+          </Flex>
+          <AiContextIndicator info={contextInfo} />
         </Flex>
         {attachments.length > 0 && (
           <Flex wrap='wrap' gap={4} className='ai-chat-attachments mg1b'>

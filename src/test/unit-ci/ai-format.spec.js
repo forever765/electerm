@@ -6,6 +6,7 @@ const {
   headersForFormat,
   buildRequest,
   parseResponse,
+  parseUsage,
   createStreamParser,
   streamResultToMessage,
   FORMAT_OPENAI_CHAT,
@@ -536,6 +537,79 @@ describe('createStreamParser - openai chat', () => {
     assert.equal(parser.toolCalls[0].function.arguments, '{"cmd":"ls"}')
   })
 
+  it('keeps parallel tool calls apart when the server sends no index', () => {
+    const chunks = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"id":"call_1","function":{"name":"run_command","arguments":"{\\"cmd\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"\\"ls\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"id":"call_2","function":{"name":"read_file","arguments":"{\\"path\\":\\"a\\"}"}}]}}]}\n\n',
+      'data: [DONE]\n'
+    ]
+    const parser = runStream(FORMAT_OPENAI_CHAT, chunks)
+    assert.equal(parser.toolCalls.length, 2)
+    assert.equal(parser.toolCalls[0].id, 'call_1')
+    assert.equal(parser.toolCalls[0].function.name, 'run_command')
+    assert.equal(parser.toolCalls[0].function.arguments, '{"cmd":"ls"}')
+    assert.equal(parser.toolCalls[1].id, 'call_2')
+    assert.equal(parser.toolCalls[1].function.name, 'read_file')
+    assert.equal(parser.toolCalls[1].function.arguments, '{"path":"a"}')
+  })
+
+  it('routes each delta back to its own call when the stream interleaves', () => {
+    const chunks = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"id":"call_1","function":{"name":"run_command","arguments":"{\\"cmd\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"id":"call_2","function":{"name":"read_file","arguments":"{\\"path\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"id":"call_1","function":{"arguments":"\\"ls\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"id":"call_2","function":{"arguments":"\\"a\\"}"}}]}}]}\n\n',
+      'data: [DONE]\n'
+    ]
+    const parser = runStream(FORMAT_OPENAI_CHAT, chunks)
+    assert.equal(parser.toolCalls.length, 2)
+    assert.deepEqual(
+      parser.toolCalls.map(c => [c.id, c.function.name, c.function.arguments]),
+      [
+        ['call_1', 'run_command', '{"cmd":"ls"}'],
+        ['call_2', 'read_file', '{"path":"a"}']
+      ]
+    )
+  })
+
+  it('handles an index on the first delta only', () => {
+    const chunks = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"run_command","arguments":"{\\"cmd\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"\\"ls\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_2","function":{"name":"read_file","arguments":"{\\"path\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"\\"a\\"}"}}]}}]}\n\n',
+      'data: [DONE]\n'
+    ]
+    const parser = runStream(FORMAT_OPENAI_CHAT, chunks)
+    assert.equal(parser.toolCalls.length, 2)
+    assert.deepEqual(
+      parser.toolCalls.map(c => [c.id, c.function.name, c.function.arguments]),
+      [
+        ['call_1', 'run_command', '{"cmd":"ls"}'],
+        ['call_2', 'read_file', '{"path":"a"}']
+      ]
+    )
+  })
+
+  it('treats a null index as missing', () => {
+    const chunks = [
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":null,"id":"call_1","function":{"name":"run_command","arguments":"{\\"cmd\\":"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"\\"ls\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":null,"id":"call_2","function":{"name":"read_file","arguments":"{\\"path\\":\\"a\\"}"}}]}}]}\n\n',
+      'data: [DONE]\n'
+    ]
+    const parser = runStream(FORMAT_OPENAI_CHAT, chunks)
+    assert.equal(parser.toolCalls.length, 2)
+    assert.deepEqual(
+      parser.toolCalls.map(c => [c.id, c.function.name, c.function.arguments]),
+      [
+        ['call_1', 'run_command', '{"cmd":"ls"}'],
+        ['call_2', 'read_file', '{"path":"a"}']
+      ]
+    )
+  })
+
   it('completes on finish_reason without [DONE]', () => {
     const parser = runStream(FORMAT_OPENAI_CHAT, [
       'data: {"choices":[{"delta":{"content":"x"},"finish_reason":"stop"}]}\n'
@@ -818,5 +892,56 @@ describe('cross format round trip (agent loop contract)', () => {
       type: 'object',
       properties: {}
     })
+  })
+})
+
+describe('parseUsage', () => {
+  it('reads openai chat usage', () => {
+    assert.deepEqual(
+      parseUsage(FORMAT_OPENAI_CHAT, {
+        usage: { prompt_tokens: 1200, completion_tokens: 40, total_tokens: 1240 }
+      }),
+      { promptTokens: 1200, completionTokens: 40, totalTokens: 1240 }
+    )
+  })
+
+  it('reads openai responses usage', () => {
+    assert.deepEqual(
+      parseUsage(FORMAT_OPENAI_RESPONSES, {
+        usage: { input_tokens: 900, output_tokens: 30, total_tokens: 930 }
+      }),
+      { promptTokens: 900, completionTokens: 30, totalTokens: 930 }
+    )
+  })
+
+  it('adds cached anthropic prompt tokens to the input count', () => {
+    assert.deepEqual(
+      parseUsage(FORMAT_ANTHROPIC, {
+        usage: {
+          input_tokens: 100,
+          output_tokens: 10,
+          cache_read_input_tokens: 8000,
+          cache_creation_input_tokens: 200
+        }
+      }),
+      { promptTokens: 8300, completionTokens: 10, totalTokens: 8310 }
+    )
+  })
+
+  it('derives the total when the provider omits it', () => {
+    assert.deepEqual(
+      parseUsage(FORMAT_OPENAI_CHAT, {
+        usage: { prompt_tokens: 5, completion_tokens: 6 }
+      }),
+      { promptTokens: 5, completionTokens: 6, totalTokens: 11 }
+    )
+  })
+
+  it('is null when there is nothing to report', () => {
+    assert.equal(parseUsage(FORMAT_OPENAI_CHAT, null), null)
+    assert.equal(parseUsage(FORMAT_OPENAI_CHAT, 'data: [DONE]'), null)
+    assert.equal(parseUsage(FORMAT_OPENAI_CHAT, { choices: [] }), null)
+    assert.equal(parseUsage(FORMAT_OPENAI_CHAT, { usage: {} }), null)
+    assert.equal(parseUsage(FORMAT_OPENAI_CHAT, { usage: { total_tokens: 0 } }), null)
   })
 })

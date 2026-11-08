@@ -4,15 +4,20 @@
 
 import message from '../components/common/message'
 import {
-  settingMap
+  settingMap,
+  settingPanelMobileBreakpoint
 } from '../common/constants'
 import getInitItem from '../common/init-setting-item'
 import deepCopy from 'json-deep-copy'
 import generate from '../common/uid'
+import { noteWidgets } from '../common/credential-provider.jsx'
 
 export default Store => {
   Store.prototype.listWidgets = async () => {
-    return window.pre.runGlobalAsync('listWidgets')
+    const widgets = await window.pre.runGlobalAsync('listWidgets')
+    // a password manager widget among them (bookmark form, connect)
+    noteWidgets(widgets)
+    return widgets
   }
 
   Store.prototype.runWidget = async (widgetId, config) => {
@@ -27,10 +32,26 @@ export default Store => {
     const {
       widgetInstances
     } = window.store
-    const index = widgetInstances.findIndex(w => w.id === instanceId)
-    if (index > -1) {
-      widgetInstances.splice(index, 1)
+    // assigned, not spliced: an in-place mutation fires no subscriber, and the
+    // instance list, the sidebar badge and the detail panel all read this array
+    window.store.widgetInstances = widgetInstances.filter(w => w.id !== instanceId)
+  }
+
+  // Selecting a running instance in the widgets list shows its detail + log in
+  // the right column, the same way selecting a widget shows its run form.
+  Store.prototype.selectWidgetInstance = (instance) => {
+    const { store } = window
+    store.setSettingItem(instance)
+    // narrow panels drill into the right col content after picking an instance
+    if (window.store.innerWidth <= settingPanelMobileBreakpoint) {
+      window.store.settingMobileView = 'content'
     }
+  }
+
+  // back to the widget form — used when the instance being viewed is gone
+  Store.prototype.closeWidgetInstance = () => {
+    const { store } = window
+    store.setSettingItem(getInitItem([], settingMap.widgets))
   }
 
   Store.prototype.stopWidget = async (instanceId) => {
@@ -50,6 +71,28 @@ export default Store => {
 
   Store.prototype.runWidgetFunc = async (instanceId, funcName, ...args) => {
     return window.pre.runGlobalAsync('runWidgetFunc', instanceId, funcName, ...args)
+  }
+
+  // Apply the AI config a widget proposed with its result (see
+  // app/widgets/ai-config.js, which whitelists the fields in the main process).
+  // The renderer writes it, on purpose: store.config is what the AI settings
+  // form edits and what the watcher persists, so a widget's offer goes through
+  // exactly the same path as a hand-typed one instead of around it.
+  Store.prototype.applyWidgetAIConfig = (aiConfig) => {
+    if (!aiConfig || typeof aiConfig !== 'object') {
+      return
+    }
+    const patch = {}
+    for (const key of Object.keys(aiConfig)) {
+      if (typeof aiConfig[key] === 'string') {
+        patch[key] = aiConfig[key]
+      }
+    }
+    if (!Object.keys(patch).length) {
+      return
+    }
+    window.store.updateConfig(patch)
+    message.success('AI settings updated')
   }
 
   Store.prototype.openWidgetsModal = () => {
@@ -101,11 +144,15 @@ export default Store => {
             title: `${result.widgetId} (${result.instanceId})`,
             widgetId: result.widgetId,
             serverInfo: result.serverInfo,
+            // an AI config the widget offers to apply, sanitised in the main
+            // process (app/widgets/ai-config.js)
+            aiConfig: result.aiConfig || null,
             config: item.config,
+            startedAt: Date.now(),
             autoRun: true,
             autoRunId: item.id
           }
-          store.widgetInstances.push(instance)
+          store.widgetInstances = [...store.widgetInstances, instance]
         }
       } catch (err) {
         console.error(`Failed to autorun widget ${item.widgetId}:`, err)

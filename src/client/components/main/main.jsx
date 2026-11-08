@@ -9,6 +9,7 @@ import TextEditor from '../text-editor/text-editor-entry'
 import Sidebar from '../sidebar'
 import CssOverwrite from '../bg/css-overwrite'
 import UiTheme from './ui-theme'
+import TitleBarOverlay from './title-bar-overlay'
 import CustomCss from '../bg/custom-css.jsx'
 import TerminalInteractive from '../terminal/terminal-interactive'
 import ConfirmModalStore from '../file-transfer/conflict-resolve.jsx'
@@ -29,6 +30,8 @@ import { isAIDisabled } from '../../common/ai-feature'
 import { ConfigProvider } from 'antd'
 import { NotificationContainer } from '../common/notification'
 import RightSidePanel from '../side-panel-r/side-panel-r'
+import CmdHistory from '../footer/cmd-history'
+import QuickCommandsFooterBox from '../quick-commands/quick-commands-box'
 import ConnectionHoppingWarning from './connection-hopping-warnning'
 import SshConfigLoadNotify from '../ssh-config/ssh-config-load-notify'
 import LoadSshConfigs from '../ssh-config/load-ssh-configs'
@@ -94,6 +97,7 @@ export default auto(function Index (props) {
     store.checkForDbUpgrade()
     store.handleGetSerials()
     store.checkPendingDeepLink()
+    store.checkPendingVvFile()
   }, [])
 
   // Track the actual input modality rather than a static capability probe:
@@ -128,6 +132,7 @@ export default auto(function Index (props) {
     pinned,
     isSecondInstance,
     pinnedQuickCommandBar,
+    quickCommandsInRightPanel,
     installSrc,
     fileTransfers,
     uiThemeConfig,
@@ -143,14 +148,26 @@ export default auto(function Index (props) {
   const cls = classnames({
     loaded: configLoaded,
     'not-webapp': !window.et.isWebApp,
-    'system-ui': store.config.useSystemTitleBar,
-    'not-system-ui': !store.config.useSystemTitleBar,
+    // the frame is the system one (macOS traffic lights, Linux/Windows title
+    // bar). Also true in Windows WCO mode, where the caption buttons are drawn
+    // over the tab bar and there is no title strip: the UI asks "is there a
+    // strip?" via store.hasNativeTitleStrip, not via this class.
+    'system-ui': store.isSystemTitleBar,
+    'not-system-ui': !store.isSystemTitleBar,
+    wco: store.isWindowControlsOverlay,
     'is-mac': isMac,
     'not-mac': !isMac,
     'is-win': isWin,
-    pinned,
+    // The left sidebar dock is desktop-only (see sidebar/index.jsx). This
+    // class drives the docked-layout CSS — the footer's left offset and the
+    // sidebar panel's top padding — so it has to follow the same gate as the
+    // layout maths in layout.jsx, or a pin persisted from a desktop session
+    // would restyle the mobile layout.
+    pinned: pinned && !store.isMobile,
     'not-win': !isWin,
-    'qm-pinned': pinnedQuickCommandBar,
+    // the pinned quick-command box only shapes the layout while it is actually
+    // in the footer — docked in the right panel it renders there instead
+    'qm-pinned': pinnedQuickCommandBar && !quickCommandsInRightPanel,
     fullscreen,
     // terminal fullscreen keeps the footer visible (rdp/vnc/spice fullscreen
     // does not — the footer would be an empty bar there)
@@ -226,6 +243,7 @@ export default auto(function Index (props) {
     transferHistory: copiedHistory,
     upgradeInfo,
     pinned,
+    isMobile: store.isMobile,
     leftSideBarIcons: config.leftSideBarIcons,
     widgetInstancesLength: widgetInstances.length
   }
@@ -253,7 +271,8 @@ export default auto(function Index (props) {
     rightPanelPinned: store.rightPanelPinned,
     rightPanelWidth: store.rightPanelWidth,
     title: rightPanelTitle,
-    rightPanelTab
+    rightPanelTab,
+    isMobile: store.isMobile
   }
   const sshConfigProps = {
     ...pick(store, [
@@ -275,6 +294,8 @@ export default auto(function Index (props) {
     showAIConfig: store.showAIConfig,
     rightPanelTab,
     agentRunning: store.agentRunning,
+    aiContextInfo: store.aiContextInfo,
+    aiAutoCompress: store.aiAutoCompress,
     currentChatSessionId: store.currentChatSessionId,
     showChatSessions: store.showChatSessions
   }
@@ -305,6 +326,9 @@ export default auto(function Index (props) {
         <UiTheme
           {...themeProps}
         />
+        {store.isWindowControlsOverlay && (
+          <TitleBarOverlay {...themeProps} />
+        )}
         <CustomCss customCss={config.customCss} configLoaded={configLoaded} />
         {store.textEditorRequested && (
           <TextEditor />
@@ -351,6 +375,12 @@ export default auto(function Index (props) {
         <RightSidePanel {...rightPanelProps}>
           {!isAIDisabled() && <AIChat {...aiChatProps} />}
           <TerminalInfo key={store.activeTabId} store={store} {...deepCopy(store.terminalInfoProps)} />
+          {/* the cmd history panel has two homes; the footer popover is the
+              other one, and both are the same component (see cmd-history.jsx) */}
+          <CmdHistory store={store} inline />
+          {/* same for the quick command panel: the footer box is the other home
+              (see quick-commands-box.jsx) */}
+          <QuickCommandsFooterBox store={store} inline />
         </RightSidePanel>
         <SshConfigLoadNotify {...sshConfigProps} />
         <LoadSshConfigs

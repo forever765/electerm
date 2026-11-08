@@ -15,7 +15,7 @@ const quickCommandSchema = z.object({
 })
 
 const sshTunnelSchema = z.object({
-  sshTunnel: z.enum(['forwardRemoteToLocal', 'forwardLocalToRemote', 'dynamicForward']).describe('Tunnel type'),
+  sshTunnel: z.enum(['forwardRemoteToLocal', 'forwardLocalToRemote', 'dynamicForward', 'remoteDynamicForward']).describe('Tunnel type'),
   sshTunnelLocalHost: z.string().optional().describe('Local host'),
   sshTunnelLocalPort: z.number().optional().describe('Local port'),
   sshTunnelRemoteHost: z.string().optional().describe('Remote host'),
@@ -28,9 +28,11 @@ const connectionHoppingSchema = z.object({
   port: z.number().optional().describe('Port number'),
   username: z.string().optional().describe('Username'),
   password: z.string().optional().describe('Password'),
-  privateKey: z.string().optional().describe('Private key'),
+  privateKey: z.string().optional().describe('Private key content'),
+  privateKeyPath: z.string().optional().describe('Path of the private key file, ignored when privateKey content is set'),
   passphrase: z.string().optional().describe('Passphrase'),
-  certificate: z.string().optional().describe('Certificate'),
+  certificate: z.string().optional().describe('Certificate content'),
+  certificatePath: z.string().optional().describe('Path of the certificate file, ignored when certificate content is set'),
   authType: z.string().optional().describe('Auth type'),
   profile: z.string().optional().describe('Profile id')
 })
@@ -55,13 +57,16 @@ export const sshBookmarkSchema = {
   username: z.string().optional().describe('SSH username'),
   password: z.string().optional().describe('SSH password'),
   authType: z.enum(['password', 'privateKey', 'profiles']).optional().describe('Authentication type'),
-  privateKey: z.string().optional().describe('Private key content or path (for privateKey auth)'),
+  privateKey: z.string().optional().describe('Private key content, used instead of privateKeyPath when both are set'),
+  privateKeyPath: z.string().optional().describe('Path of the private key file to read, ignored when privateKey content is set'),
   passphrase: z.string().optional().describe('Passphrase for private key/certificate'),
-  certificate: z.string().optional().describe('Certificate content'),
+  certificate: z.string().optional().describe('Certificate content, used instead of certificatePath when both are set'),
+  certificatePath: z.string().optional().describe('Path of the certificate file to read, ignored when certificate content is set'),
   enableSsh: z.boolean().optional().describe('Enable ssh, default is true'),
   enableSftp: z.boolean().optional().describe('Enable sftp, default is true'),
   useSshAgent: z.boolean().optional().describe('Use SSH agent, default is true'),
   sshAgent: z.string().optional().describe('SSH agent path'),
+  agentForward: z.boolean().optional().describe('Enable SSH agent forwarding (like ssh -A), requires SSH agent, default is false'),
   serverHostKey: z.array(z.string()).optional().describe('Server host key algorithms'),
   cipher: z.array(z.string()).optional().describe('Cipher list'),
   compress: z.array(z.string()).optional().describe('Compression algorithms'),
@@ -72,6 +77,7 @@ export const sshBookmarkSchema = {
   encode: z.string().optional().describe('Charset, default is utf8'),
   envLang: z.string().optional().describe('ENV LANG, default is en_US.UTF-8'),
   color: z.string().optional().describe('Tag color, like #000000'),
+  icon: z.string().optional().describe('Icon of the bookmark: `icon:<name>` for a built-in icon (see electerm-icons, e.g. `icon:ubuntu`), or an absolute path of a local image file. Takes precedence over the colour'),
   sshTunnels: z.array(sshTunnelSchema).optional().describe('SSH tunnel definitions'),
   connectionHoppings: z.array(connectionHoppingSchema).optional().describe('Connection hopping definitions')
 }
@@ -83,7 +89,9 @@ export const telnetBookmarkSchema = {
   username: z.string().optional().describe('Telnet username'),
   password: z.string().optional().describe('Telnet password'),
   loginPrompt: z.string().optional().describe('Login prompt regex'),
-  passwordPrompt: z.string().optional().describe('Password prompt regex')
+  passwordPrompt: z.string().optional().describe('Password prompt regex'),
+  txLineEnding: z.enum(['\r', '\n', '\r\n']).optional().describe('TX line ending appended on Enter: "\\r" (CR, default), "\\n" (LF), "\\r\\n" (CR+LF). Useful for telnet-to-serial-port servers'),
+  rxLineEnding: z.enum(['none', 'lf_to_crlf', 'cr_to_crlf']).optional().describe('RX line ending conversion: "none" (pass-through, default), "lf_to_crlf" (LF→CRLF for LF-only devices), "cr_to_crlf" (CR→CRLF for CR-only devices, which otherwise overwrite the current line)')
 }
 
 export const serialBookmarkSchema = {
@@ -152,6 +160,9 @@ export const spiceBookmarkSchema = {
   ...commonNetworkBookmarkProps,
   host: z.string().describe('Spice host address'),
   port: z.number().optional().describe('Spice port (default 5900)'),
+  tls: z.boolean().optional().describe('Connect over TLS, default false'),
+  ca: z.string().optional().describe('CA certificate in PEM format, used to verify the TLS peer'),
+  hostSubject: z.string().optional().describe('Expected TLS certificate subject, like CN=pve1,O=Example'),
   viewOnly: z.boolean().optional().describe('View only mode'),
   scaleViewport: z.boolean().optional().describe('Scale viewport to window, default is true')
 }

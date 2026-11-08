@@ -1,9 +1,9 @@
 const {
-  BrowserWindow, screen
+  BrowserWindow, screen, dialog, app
 } = require('electron')
 const { resolve } = require('path')
 const {
-  isDev, packInfo, iconPath, isMac,
+  isDev, packInfo, iconPath, isMac, isWin,
   minWindowWidth, minWindowHeight
 } = require('../common/runtime-constants')
 const defaults = require('../common/default-setting')
@@ -12,15 +12,18 @@ const {
   setWindowPos,
   repairFullScreenGeometry
 } = require('./window-control')
-const { ensureWindowVisible } = require('./window-restore')
+const {
+  ensureWindowVisible,
+  createDisplayRefitter
+} = require('./window-restore')
 const { onClose } = require('./on-close')
-const { resolveFontWorkaround } = require('./font-check')
 const { initIpc, initAppServer } = require('./ipc')
 const { disableShortCuts } = require('./key-bind')
 const _ = require('./lodash.js')
 const getPort = require('./get-port')
 const globalState = require('./glob-state')
 const webviewHandler = require('./webview-handler')
+const { getTitleBarOptions, windowBackground } = require('./title-bar')
 
 // A crashed / reloaded renderer leaves the window object alive, and sending to
 // it then throws "Render frame was disposed before WebFrameMain could be
@@ -41,10 +44,11 @@ exports.createWindow = async function (userConfig) {
   globalState.set('requireAuth', !!userConfig.hashedPassword)
   const { width, height, x, y } = await getWindowSize()
   const { useSystemTitleBar = defaults.useSystemTitleBar } = userConfig
-  // On a box where Chromium resolves no font, Blink aborts the renderer on the
-  // first glyph it has to fall back for, so pick the workaround that measurably
-  // gives us text (see font-check.js). {} on any normal install.
-  const fontFix = await resolveFontWorkaround()
+  // Windows always keeps the native frame (window controls overlay, see
+  // title-bar.js), so the renderer must treat the frame as the system one there
+  // regardless of the setting; useSystemTitleBar only decides the macOS/Linux
+  // chrome.
+  globalState.set('systemTitleBar', isWin || !!useSystemTitleBar)
   const win = new BrowserWindow({
     width,
     height,
@@ -54,9 +58,9 @@ exports.createWindow = async function (userConfig) {
     minWidth: minWindowWidth,
     minHeight: minWindowHeight,
     title: packInfo.name,
-    frame: useSystemTitleBar,
-    transparent: !useSystemTitleBar,
-    backgroundColor: '#333333',
+    backgroundColor: windowBackground,
+    // frame / transparent / titleBarStyle / titleBarOverlay, per platform
+    ...getTitleBarOptions(useSystemTitleBar, isWin),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -64,10 +68,8 @@ exports.createWindow = async function (userConfig) {
       preload: resolve(__dirname, '../preload/preload.js'),
       webviewTag: true,
       devTools: !userConfig.disableDeveloperTool,
-      spellcheck: false,
-      ...fontFix
+      spellcheck: false
     },
-    titleBarStyle: useSystemTitleBar ? 'default' : 'hidden',
     icon: iconPath
   })
   // Safety net: verify the window is actually visible on a connected
@@ -76,6 +78,13 @@ exports.createWindow = async function (userConfig) {
   // hides the traffic lights
   if (isMac) {
     win.setWindowButtonVisibility(true)
+  } else if (useSystemTitleBar && !isWin) {
+    // The system title bar would otherwise show Electron's default
+    // Edit/View/Window/Help menu bar; hide it (its keyboard accelerators still
+    // work). Windows is excluded on purpose: there the window is frameless
+    // (titleBarStyle 'hidden'), RootView::SetMenu bails out for a frameless
+    // window and no menu bar is ever created, so the call would be a no-op.
+    win.setMenuBarVisibility(false)
   }
 
   win.webContents.session.setSpellCheckerDictionaryDownloadURL('https://00.00/')
@@ -84,7 +93,28 @@ exports.createWindow = async function (userConfig) {
 
   globalState.set('win', win)
 
-  await initAppServer()
+  // A backend that cannot bind its port used to leave this await pending
+  // forever: window created, nothing in it, no message, app just sits there.
+  // Say it out loud instead. The usual cause on Windows is the port landing in
+  // a reserved/excluded range (Hyper-V, WinNAT, WSL2, Docker Desktop) or being
+  // blocked by security software -- hence the -sp hint.
+  try {
+    await initAppServer()
+  } catch (err) {
+    console.error('init app server failed:', err)
+    try {
+      dialog.showErrorBox(
+        'electerm',
+        `electerm could not start its local backend service.\n\n${err?.message || err}\n\n` +
+        'This is usually a port problem. On Windows a port can be reserved by ' +
+        'Hyper-V/WSL2/Docker Desktop, and security software can block it too.\n\n' +
+        'Try starting electerm with another port, e.g.\n' +
+        'electerm.exe -sp 40975'
+      )
+    } catch (_) {}
+    app.quit()
+    return
+  }
   initIpc()
   const port = isDev
     ? process.env.devPort || 5570
@@ -123,6 +153,20 @@ exports.createWindow = async function (userConfig) {
       const { x, y } = win.getBounds()
       setWindowPos({ x, y })
     }, 100))
+
+    // Windows only. Windows keeps a window's size in DIP across a per-monitor
+    // DPI boundary and only refits *maximized* windows, so a window dragged
+    // from a large monitor onto a smaller one is left hanging off the new
+    // screen. `moved` fires once, when the drag settles; see
+    // createDisplayRefitter for why this is not wired up on macOS.
+    if (isWin) {
+      win.on('moved', createDisplayRefitter(
+        win,
+        screen,
+        minWindowWidth,
+        minWindowHeight
+      ))
+    }
 
     win.on('focus', () => {
       safeSend(win, 'focused', null)

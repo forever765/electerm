@@ -119,8 +119,18 @@ export default class FileMode extends React.PureComponent {
     }
   }
 
-  escapePowerShellPath = (value) => {
-    return String(value).replace(/'/g, "''")
+  // Local Windows paths are transported base64-encoded and decoded inside the
+  // PowerShell script, exactly like the remote ones below. Escaping the ASCII
+  // apostrophe is not enough: PowerShell also accepts the typographic quotes
+  // U+2018/U+2019/U+201A/U+201B as string delimiters, so a folder name holding
+  // one of them closes the literal and runs as code. See GHSA-h4v2-5hq4-wc2g.
+  b64Folder = (value) => {
+    const bytes = new TextEncoder().encode(String(value))
+    let bin = ''
+    for (const b of bytes) {
+      bin += String.fromCharCode(b)
+    }
+    return btoa(bin)
   }
 
   escapePosixShellArg = (value) => {
@@ -161,21 +171,21 @@ export default class FileMode extends React.PureComponent {
 
   calcRemoteWin = async (folder) => {
     const winFolder = this.normalizeRemoteWindowsPath(folder)
-    const escapedFolder = this.escapePowerShellPath(winFolder)
-    const cmd = `powershell.exe -NoLogo -NonInteractive -NoProfile -Command "$result = Get-ChildItem -LiteralPath '${escapedFolder}' -Recurse -File | Measure-Object -Property Length -Sum; if ($null -eq $result.Sum) { 0 } else { [int64]$result.Sum }"`
+    const folderB64 = this.b64Folder(winFolder)
+    const cmd = `powershell.exe -NoLogo -NonInteractive -NoProfile -Command "$result = Get-ChildItem -LiteralPath ([System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${folderB64}'))) -Recurse -File | Measure-Object -Property Length -Sum; if ($null -eq $result.Sum) { 0 } else { [int64]$result.Sum }"`
     const result = await runCmd(this.state.pid, cmd).catch(window.store.onError)
     return filesize(parseInt(String(result || '').trim(), 10) || 0)
   }
 
   calcLocal = async (folder) => {
-    const safeFolder = isWin
-      ? this.escapePowerShellPath(folder)
-      : this.escapePosixShellArg(folder)
-    const cmd = isWin
-      ? `Get-ChildItem -Recurse '${safeFolder}' | Measure-Object -Property Length -Sum`
-      : `du -sh '${safeFolder}'`
-    const func = isWin ? 'runWinCmd' : 'run'
-    const res = await window.fs[func](cmd).catch(window.store.onError)
+    if (isWin) {
+      const folderB64 = this.b64Folder(folder)
+      const cmd = `$p=[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${folderB64}'));Get-ChildItem -LiteralPath $p -Recurse | Measure-Object -Property Length -Sum`
+      const res = await window.fs.runWinCmd(cmd).catch(window.store.onError)
+      return this.getSize(res)
+    }
+    const safeFolder = this.escapePosixShellArg(folder)
+    const res = await window.fs.run(`du -sh '${safeFolder}'`).catch(window.store.onError)
     return this.getSize(res)
   }
 

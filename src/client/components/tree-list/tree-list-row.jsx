@@ -2,7 +2,11 @@ import { memo } from 'react'
 import TreeExpander from './tree-expander'
 import TreeListItem from './tree-list-item'
 import TreeItemOp from './tree-item-op'
-import { treeLevelIndent } from './tree-list-layout'
+import {
+  isTreeIndentCapped,
+  treeGroupPaddingPx,
+  treeIndentPx
+} from './tree-list-layout'
 import createName from '../../common/create-title'
 
 // memoized: VirtualTreeList re-renders every scroll frame and re-invokes
@@ -16,7 +20,7 @@ function TreeListRow (props) {
     keyword,
     expanded,
     activeItemId,
-    searchSelectedRowKey,
+    selectedRowKey,
     staticList,
     leftSidePanelWidth,
     handleExpand,
@@ -40,18 +44,29 @@ function TreeListRow (props) {
     item?.bookmarkIds?.length ||
     item?.bookmarkGroupIds?.length
   )
+  // `path` is the ancestor chain built by buildVisibleTreeRows; joined here so
+  // TreeListItem's memo comparison stays a string comparison (the row objects
+  // are rebuilt on every render, an array prop would never compare equal).
+  // A single ancestor carries no disambiguation ("Default / host" is noise), so
+  // the prefix only starts once an item sits two or more groups deep.
+  const itemPath = (row.path || []).length > 1
+    ? row.path.join(' / ')
+    : ''
   const itemProps = {
     item,
     isGroup,
     parentId,
     itemLabel: isGroup ? (item?.title || '') : createName(item),
     itemColor: item?.color,
+    itemIcon: item?.icon,
     itemDescription: item?.description,
     itemLevel: item?.level,
+    itemPath,
+    indentCapped: isTreeIndentCapped(depth),
     leftSidePanelWidth,
     staticList,
     selectedItemId: activeItemId,
-    searchSelected: searchSelectedRowKey === row.key,
+    rowSelected: selectedRowKey === row.key,
     del,
     openAll,
     openMoveModal,
@@ -71,7 +86,7 @@ function TreeListRow (props) {
     return (
       <div
         className={`tree-list-row${isHidden ? ' is-hidden' : ''}`}
-        style={{ paddingLeft: depth * treeLevelIndent }}
+        style={{ paddingLeft: treeIndentPx(depth) }}
       >
         <TreeListItem {...itemProps} />
         <TreeItemOp
@@ -89,10 +104,13 @@ function TreeListRow (props) {
     )
   }
 
+  // the group row's own left padding comes from .tree-list-row-group (the
+  // expander column), so it is one step less than its content offset
+  const groupPadding = treeGroupPaddingPx(depth)
   return (
     <div
       className={`tree-list-row${isHidden ? ' is-hidden' : ''}`}
-      style={{ paddingLeft: Math.max(0, (depth - 1) * treeLevelIndent) }}
+      style={{ paddingLeft: groupPadding }}
     >
       <div className='tree-list-row-group'>
         <TreeExpander

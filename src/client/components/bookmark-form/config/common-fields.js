@@ -2,10 +2,15 @@
  * Common field definitions shared across multiple configs
  * Reduces duplication and ensures consistency
  */
-import { terminalTypes } from '../../../common/constants'
+import {
+  terminalTypes,
+  commonTxLineEndings,
+  commonRxLineEndings
+} from '../../../common/constants'
 import defaultSettings from '../../../common/default-setting'
 import encodes from '../common/encodes'
 import { isEmpty } from 'lodash-es'
+import { hasCredentialProvider } from '../../../common/credential-provider.jsx'
 
 const e = window.translate
 
@@ -39,7 +44,7 @@ const commonLangOptions = [
 export const commonFields = {
   // Basic connection fields
   host: {
-    type: 'colorTitle',
+    type: 'input',
     name: 'host',
     label: () => e('host'),
     rules: [{ required: true, message: e('host') + ' required' }]
@@ -225,6 +230,17 @@ export const commonFields = {
     name: '__x11__',
     label: 'x11'
   },
+  // this bookmark asks a password manager widget for its password; shown only
+  // with one installed, off unless the user asks for it
+  usePasswordManager: {
+    type: 'switch',
+    name: 'usePasswordManager',
+    label: () => e('usePasswordManager'),
+    valuePropName: 'checked',
+    get hidden () {
+      return !hasCredentialProvider()
+    }
+  },
 
   // Dynamic sections
   quickCommands: {
@@ -276,6 +292,25 @@ export const terminalSettings = [
   commonFields.terminalBackground
 ]
 
+// Line-ending conversion, for the transports that have no pty line discipline
+// in front of them (serial, telnet). Kept in one place so both forms offer the
+// same values - the labels are plain English on purpose, TX/RX plus CR/LF are
+// the terms every terminal calls them by and there is no locale key for them.
+export const lineEndingFields = [
+  {
+    type: 'select',
+    name: 'txLineEnding',
+    label: 'TX line ending',
+    options: commonTxLineEndings.map(d => ({ value: d.value, label: d.label }))
+  },
+  {
+    type: 'select',
+    name: 'rxLineEnding',
+    label: 'RX line ending',
+    options: commonRxLineEndings.map(d => ({ value: d.value, label: d.label }))
+  }
+]
+
 export const sshSettings = [
   {
     type: 'switch',
@@ -316,7 +351,7 @@ export const basicAuthFields = [
 
 export const sshAuthFields = [
   commonFields.category,
-  commonFields.title,
+  commonFields.colorTitle,
   { ...commonFields.host, type: 'sshHostSelector' },
   commonFields.username,
   { type: 'sshAuthTypeSelector', name: 'authType', label: '' },
@@ -327,6 +362,7 @@ export const sshAuthFields = [
     name: 'useSshAgent'
   },
   { type: 'switch', name: 'isMFA', label: () => e('MFA/OTP'), valuePropName: 'checked' },
+  commonFields.usePasswordManager,
   commonFields.runScripts,
   commonFields.description,
   commonFields.setEnv,
@@ -341,10 +377,11 @@ export const sshAuthFields = [
 // Telnet auth fields - similar to SSH but with filtered auth types (no privateKey)
 export const telnetAuthFields = [
   commonFields.category,
-  commonFields.title,
+  commonFields.colorTitle,
   commonFields.host,
   commonFields.username,
   commonFields.password,
+  commonFields.usePasswordManager,
   commonFields.loginPrompt,
   commonFields.passwordPrompt,
   { type: 'profileItem', name: '__profile__', label: '', profileFilter: d => !isEmpty(d.telnet) },

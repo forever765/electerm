@@ -43,6 +43,19 @@ function generateTestBookmark (description) {
   }
 }
 
+// Generate a test quick command based on description
+function generateTestQuickCommand () {
+  return {
+    name: 'Test Quick Command',
+    commands: [
+      { name: 'list', command: 'ls -al', delay: 100 },
+      { name: 'disk', command: 'df -h', delay: 200 }
+    ],
+    inputOnly: false,
+    labels: ['test']
+  }
+}
+
 // Chat completions endpoint
 app.post('/chat/completions', (req, res) => {
   const { messages, stream } = req.body
@@ -69,6 +82,15 @@ app.post('/chat/completions', (req, res) => {
         }
       }]
     })
+  } else if (lastMessage.includes('Generate the quick command JSON')) {
+    const quickCommand = generateTestQuickCommand()
+    res.json({
+      choices: [{
+        message: {
+          content: JSON.stringify(quickCommand, null, 2)
+        }
+      }]
+    })
   } else if (stream) {
     // Handle streaming response
     res.writeHead(200, {
@@ -89,7 +111,14 @@ app.post('/chat/completions', (req, res) => {
       '## Text Formatting\n' +
       '**Bold text** and *italic text*\n\n' +
       '> This is a blockquote\n\n' +
-      '[This is a link](https://example.com)'
+      '[This is a link](https://example.com)\n\n' +
+      // GFM table: react-markdown only does CommonMark on its own, so this
+      // only becomes a <table> if remark-gfm is wired up (see ai-output.jsx)
+      '## Table Example\n' +
+      '| Name | Type | Notes |\n' +
+      '| --- | --- | --- |\n' +
+      '| alpha | str | first |\n' +
+      '| beta | int | second |'
 
     // Split response into chunks and send as streaming data
     const chunks = mockResponse.split(' ')
@@ -130,7 +159,14 @@ app.post('/chat/completions', (req, res) => {
       '## Text Formatting\n' +
       '**Bold text** and *italic text*\n\n' +
       '> This is a blockquote\n\n' +
-      '[This is a link](https://example.com)'
+      '[This is a link](https://example.com)\n\n' +
+      // GFM table: react-markdown only does CommonMark on its own, so this
+      // only becomes a <table> if remark-gfm is wired up (see ai-output.jsx)
+      '## Table Example\n' +
+      '| Name | Type | Notes |\n' +
+      '| --- | --- | --- |\n' +
+      '| alpha | str | first |\n' +
+      '| beta | int | second |'
 
     res.json({
       choices: [{

@@ -21,12 +21,16 @@ import keyControlPressed from '../../../common/key-control-pressed.js'
 export const initMixin = {
   async initTerminal () {
     const { themeConfig, tab = {}, config = {} } = this.props
-    const tc = this.getRendererThemeConfig(themeConfig)
+    // Always start with the built-in DOM renderer's theme: the terminal begins
+    // on DOM, and the lifecycle controller activates WebGL lazily once it is
+    // really visible and re-applies the theme there.
+    const tc = this.getRendererThemeConfig(themeConfig, rendererTypes.dom)
     const Terminal = await loadTerminal()
     const term = new Terminal({
       allowProposedApi: true,
       scrollback: config.scrollback,
       rightClickSelectsWord: config.rightClickSelectsWord || false,
+      mouseEventsRequireAlt: config.mouseEventsRequireAlt || false,
       fontFamily: tab.fontFamily || config.fontFamily,
       theme: tc,
       allowTransparency: true,
@@ -41,16 +45,12 @@ export const initMixin = {
     term.onSelectionChange(this.onSelection)
     term.open(this.domRef.current, true)
     this.registerTerminalColorQueryHandlers(term, themeConfig)
-    await this.loadRenderer(term, config)
     this.fixSelectionColors(term)
-    // Re-apply the theme after the renderer is loaded. The Terminal was
-    // constructed before UiTheme's useEffect ran, so the initial theme
-    // may have a stale background. Pass `term` directly because this.term
-    // is not assigned yet. Use deferred=true so a second repaint picks up
-    // any CSS --main changes applied by UiTheme's useEffect.
-    if (config.rendererType === rendererTypes.webGL) {
-      this.applyTerminalTheme(true, term)
-    }
+    // The theme is intentionally not re-applied here based on
+    // config.rendererType: every terminal starts on the DOM renderer, and the
+    // WebGL theme is only applied by activateVisibleWebglRenderer once the
+    // lifecycle controller really activates WebGL. Applying it during init
+    // would contradict the DOM theme set just above.
 
     const FitAddon = await loadFitAddon()
     this.fitAddon = new FitAddon()
@@ -65,6 +65,11 @@ export const initMixin = {
     this.cmdAddon.onCwdChanged((cwd) => {
       this.setCwd(cwd)
     })
+    // A fresh prompt (OSC 633;A) proves the shell is still alive, so an
+    // earlier `exit` only left a nested shell. Dropping the exit latch here
+    // keeps the next real disconnect from closing the tab (#4629). Shells
+    // without integration are covered by `exitCloseWindow` instead.
+    this.cmdAddon.onPrompt(() => this.clearUserTypeExit())
     const SearchAddon = await loadSearchAddon()
     this.searchAddon = new SearchAddon()
     const LigaturesAddon = await loadLigaturesAddon()
@@ -92,8 +97,19 @@ export const initMixin = {
     this.term = term
     term.onSelectionChange(this.onSelectionChange)
     term.attachCustomKeyEventHandler(this.handleKeyboardEvent.bind(this))
-    // 容器不可见（隐藏标签 display:none）时不 fit，避免算出 0 列把 shell
-    // 提示符逐字符错误换行；待标签激活可见后由 fitAndRefresh 重新适配。
+    // Every terminal starts on the built-in DOM renderer; only a really
+    // visible one gets WebGL, activated lazily by the lifecycle controller on
+    // the next animation frame. A hidden terminal still connects its
+    // SSH/socket as usual, it just does not hold a WebGL context. Activation is
+    // never awaited here: WebGL load latency must not block the
+    // restoreReloadScreen() and remoteInit() calls below.
+    this.rendererLifecycleReady = true
+    this.setupRendererLifecycle()
+    this.reconcileRenderer('initial')
+      .catch(error => console.error('initial renderer reconcile failed', error))
+    // Do not fit while the container is invisible (hidden tab, display:none):
+    // 0 columns would wrap the shell prompt character by character. The fit is
+    // redone by fitAndRefresh() once the tab is visible.
     if (this.isElementVisible()) {
       this.fitAddon.fit()
     }

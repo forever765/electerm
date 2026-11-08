@@ -78,6 +78,9 @@ class ShortcutControl extends React.PureComponent {
     const { type } = lastClickedFile
     const { inputFocus } = activeSftp
 
+    if (!inputFocus && activeSftp.handleTypeToFilter(e)) {
+      return
+    }
     if (keyControlPressed(e) && keyPressed(e, 'keyA') && !inputFocus) {
       e.stopPropagation()
       activeSftp.selectAll(type, e)
@@ -155,6 +158,11 @@ class ShortcutControl extends React.PureComponent {
     if (activeTabId) {
       window.store.duplicateTab(activeTabId)
     }
+  }, 500)
+
+  stopQuickCommandShortcut = throttle((e) => {
+    e.stopPropagation()
+    window.store.stopQuickCommand()
   }, 500)
 
   prevTabShortcut = throttle((e) => {

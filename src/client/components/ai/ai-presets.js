@@ -1,5 +1,69 @@
 export const defaultAIPresets = [
   {
+    id: 'infistar',
+    nameAI: 'Infistar',
+    baseURLAI: 'https://infistar.cc/v1',
+    // Both hosts serve the same gateway. The first one is the default, the
+    // others are offered in the API URL picker.
+    baseURLAIs: [
+      'https://infistar.cc/v1',
+      'https://infistar.ai/v1'
+    ],
+    apiPathAI: '/chat/completions',
+    modelAI: 'deepseek-v4-flash',
+    pinned: true,
+    authHeaderNameAI: 'Authorization: Bearer',
+    siteUrl: 'https://www.infistar.cc/register?aff=4R4JT29X&ref_source=link',
+    modelAIs: [
+      { value: 'deepseek-v4-flash' },
+      { value: 'deepseek-v4-pro' },
+      { value: 'claude-sonnet-4-6' }
+    ]
+  },
+  {
+    id: 'packycode',
+    nameAI: 'PackyCode',
+    baseURLAI: 'https://cf.api.fan/v1',
+    apiPathAI: '/chat/completions',
+    modelAI: 'deepseek-flash',
+    pinned: true,
+    authHeaderNameAI: 'Authorization: Bearer',
+    siteUrl: 'https://www.packyapi.ai/register?aff=DOZI',
+    modelAIs: [
+      { value: 'deepseek-flash' },
+      { value: 'deepseek-v4-pro' }
+    ]
+  },
+  {
+    id: 'apimart',
+    nameAI: 'ApiMart',
+    pinned: true,
+    baseURLAI: 'https://api.apimart.ai/v1',
+    apiPathAI: '/chat/completions',
+    modelAI: 'deepseek-v4-flash',
+    authHeaderNameAI: 'Authorization: Bearer',
+    siteUrl: 'https://go.apimart.ai/gh-electerm'
+  },
+  {
+    id: 'ApiSmart',
+    nameAI: 'ApiSmart',
+    pinned: true,
+    baseURLAI: 'https://api.apismart.ai/v1',
+    apiPathAI: '/chat/completions',
+    modelAI: 'DEEPSEEK_V4_FLASH',
+    authHeaderNameAI: 'Authorization: Bearer',
+    siteUrl: 'https://apismart.ai/?utm_source=electerm_app&utm_medium=link&utm_campaign=electerm'
+  },
+  {
+    id: 'fluxionai',
+    nameAI: 'Sidrune',
+    baseURLAI: 'https://sidrune.ai/v1',
+    apiPathAI: '/chat/completions',
+    modelAI: 'deepseek-v4-flash-0731',
+    authHeaderNameAI: 'Authorization: Bearer',
+    siteUrl: 'https://fluxionai.space/register?source=github&campaign=github-sidrune-electerm&promo=SDRELECTERM&aff=7H7DERHU3GFF'
+  },
+  {
     id: 'atlascloud',
     nameAI: 'AtlasCloud',
     baseURLAI: 'https://api.atlascloud.ai/v1',
@@ -23,24 +87,6 @@ export const defaultAIPresets = [
     siteUrl: 'https://cloud.siliconflow.cn/i/Xa85Yz6R'
   },
   {
-    id: 'ApiSmart',
-    nameAI: 'ApiSmart',
-    baseURLAI: 'https://api.apismart.ai/v1',
-    apiPathAI: '/chat/completions',
-    modelAI: 'DEEPSEEK_V4_FLASH',
-    authHeaderNameAI: 'Authorization: Bearer',
-    siteUrl: 'https://apismart.ai/?utm_source=electerm_app&utm_medium=link&utm_campaign=electerm'
-  },
-  {
-    id: 'apimart',
-    nameAI: 'ApiMart',
-    baseURLAI: 'https://api.apimart.ai/v1',
-    apiPathAI: '/chat/completions',
-    modelAI: 'deepseek-v4-flash',
-    authHeaderNameAI: 'Authorization: Bearer',
-    siteUrl: 'https://go.apimart.ai/gh-electerm'
-  },
-  {
     id: 'deepseek',
     nameAI: 'DeepSeek',
     baseURLAI: 'https://api.deepseek.com/v1',
@@ -56,21 +102,6 @@ export const defaultAIPresets = [
     apiPathAI: '/chat/completions',
     modelAI: 'gpt-4o',
     authHeaderNameAI: 'Authorization: Bearer',
-    siteUrl: 'https://platform.openai.com/api-keys?utm_source=electerm_app&utm_medium=link&utm_campaign=electerm'
-  },
-  {
-    id: 'openai-responses',
-    nameAI: 'OpenAI (Responses API)',
-    baseURLAI: 'https://api.openai.com/v1',
-    apiPathAI: '/responses',
-    modelAI: 'gpt-4o',
-    authHeaderNameAI: 'Authorization: Bearer',
-    modelAIs: [
-      { value: 'gpt-4o' },
-      { value: 'gpt-4o-mini' },
-      { value: 'gpt-4.1' },
-      { value: 'o4-mini' }
-    ],
     siteUrl: 'https://platform.openai.com/api-keys?utm_source=electerm_app&utm_medium=link&utm_campaign=electerm'
   },
   {
@@ -139,6 +170,41 @@ export const defaultAIPresets = [
     authHeaderNameAI: 'Authorization: Bearer'
   },
   {
+    id: 'minimax-global',
+    nameAI: 'MiniMax (Global)',
+    baseURLAI: 'https://api.minimax.io/v1',
+    apiPathAI: '/chat/completions',
+    modelAI: 'MiniMax-M3.1-Flash',
+    authHeaderNameAI: 'Authorization: Bearer',
+    // MiniMax returns retired models next to the current ones, so the preset
+    // keeps its own suggestions instead of the fetched/cached list.
+    ignoreCachedModels: true,
+    modelAIs: [
+      { value: 'MiniMax-M3.1-Flash' },
+      { value: 'MiniMax-M3' }
+    ],
+    siteUrl: 'https://platform.minimax.io/user-center/basic-information/interface-key?utm_source=electerm_app&utm_medium=link&utm_campaign=electerm'
+  },
+  {
+    id: 'minimax-cn',
+    nameAI: 'MiniMax (China)',
+    baseURLAI: 'https://api.minimax.cn/v1',
+    // The same endpoint is documented under the older minimaxi.com host.
+    baseURLAIs: [
+      'https://api.minimax.cn/v1',
+      'https://api.minimaxi.com/v1'
+    ],
+    apiPathAI: '/chat/completions',
+    modelAI: 'MiniMax-M3.1-Flash',
+    authHeaderNameAI: 'Authorization: Bearer',
+    ignoreCachedModels: true,
+    modelAIs: [
+      { value: 'MiniMax-M3.1-Flash' },
+      { value: 'MiniMax-M3' }
+    ],
+    siteUrl: 'https://platform.minimaxi.com/user-center/basic-information/interface-key?utm_source=electerm_app&utm_medium=link&utm_campaign=electerm'
+  },
+  {
     id: 'xai',
     nameAI: 'xAI (Grok)',
     baseURLAI: 'https://api.x.ai/v1',
@@ -164,10 +230,56 @@ export const defaultAIPresets = [
   }
 ]
 
+export function normalizeAIBaseURL (url) {
+  return (url || '').trim().replace(/\/+$/, '')
+}
+
+// A provider can be reachable at several hosts (Infistar's two domains,
+// MiniMax's older host). `baseURLAI` stays the single value the form saves;
+// the list only drives preset matching and the API URL picker.
+export function getPresetBaseURLs (preset) {
+  if (Array.isArray(preset?.baseURLAIs)) {
+    return preset.baseURLAIs
+  }
+  return preset?.baseURLAI ? [preset.baseURLAI] : []
+}
+
+// `presets` is optional so the config form can search the list it renders,
+// which also contains the build-injected custom preset. Trailing slashes and
+// alternate provider hosts all have to resolve to the same preset, or its
+// key link and curated model suggestions disappear.
+export function findAIPreset (url, presets = defaultAIPresets) {
+  const target = normalizeAIBaseURL(url)
+  return presets.find(p =>
+    getPresetBaseURLs(p).some(u => normalizeAIBaseURL(u) === target))
+}
+
+// Suggestions do not constrain the editable model value or saved configurations.
+// `fetched` marks a list that just came back from the API: an explicit refresh
+// is the user asking for the real list, so it is merged even for presets that
+// ignore cached lists. A cached list is not trusted the same way, because it can
+// still hold models the provider retired since it was saved.
+export function getAIModelOptions (baseURL, preset, cachedModels = [], fetched = false) {
+  const target = findAIPreset(baseURL) || preset
+  const presetModels = (target?.modelAIs || [])
+    .map(o => (typeof o === 'string' ? o : o.value))
+  const values = target?.ignoreCachedModels && !fetched
+    ? presetModels
+    : [...presetModels, ...cachedModels]
+  return [...new Set(values.filter(Boolean))].map(value => ({ value }))
+}
+
 export function getAIPresets () {
   const presets = [...defaultAIPresets]
-  if (window.et?.defaultAIPreset) {
-    presets.unshift(window.et.defaultAIPreset)
+  const customPreset = window.et?.defaultAIPreset
+  if (customPreset) {
+    const lastPinnedIndex = presets.reduce((maxIndex, preset, index) => {
+      if (preset.pinned) {
+        return index
+      }
+      return maxIndex
+    }, -1)
+    presets.splice(lastPinnedIndex + 1, 0, customPreset)
   }
   return presets
 }

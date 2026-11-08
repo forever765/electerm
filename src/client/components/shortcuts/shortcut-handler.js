@@ -1,4 +1,8 @@
-import { getKeyCharacter } from './get-key-char.js'
+import {
+  getKeyCombo,
+  isAltBufferPasteCombo,
+  matchesShortcut
+} from './terminal-key-combo.js'
 import shortcutsDefaultsGen from './shortcuts-defaults.js'
 import {
   isMacJs
@@ -29,10 +33,19 @@ function processEscapeSequences (text) {
   return result
 }
 
+// keys this handler sends itself never reach the terminal's onData, so pass
+// them to a quick command recording here
+function recordInput (ctx, data) {
+  if (window.store.qmRecording && ctx.props?.tab) {
+    window.store.recordQuickCommandInput(ctx.props.tab.id, data)
+  }
+}
+
 function sendInputData (ctx, data) {
   if (!data) return
   if (ctx.attachAddon && ctx.attachAddon._sendData) {
     ctx.attachAddon._sendData(data)
+    recordInput(ctx, data)
   }
   // if (!ctx.onData) return
   // if (splitChars) {
@@ -155,16 +168,19 @@ function isInAntdInput () {
   return activeElement && activeElement.classList.contains('shortcut-input')
 }
 
+function getPasteShortcut (ctx) {
+  const propName = isMacJs ? 'shortcutMac' : 'shortcut'
+  const conf = buildConfig(ctx.props.config, d => !d.hidden)[`terminal_paste_${propName}`]
+  return conf ? conf.shortcut : ''
+}
+
 export function shortcutExtend (Cls) {
   Cls.prototype.handleKeyboardEvent = function (event) {
     const {
-      code,
       ctrlKey,
       shiftKey,
       metaKey,
       altKey,
-      wheelDeltaY,
-      button,
       type,
       key
     } = event
@@ -191,6 +207,7 @@ export function shortcutExtend (Cls) {
       const altDelDelKey = delKey === 8 ? 127 : 8
       const char = String.fromCharCode(shiftKey ? delKey : altDelDelKey)
       this.socket.send(char)
+      recordInput(this, char)
       this.term.scrollToBottom()
       return false
     } else if (
@@ -206,12 +223,27 @@ export function shortcutExtend (Cls) {
       event.stopPropagation()
       const shiftEnterText = processEscapeSequences(this.props.config.shiftEnterMode || '\\n')
       this.socket.send(shiftEnterText)
+      recordInput(this, shiftEnterText)
       this.term.scrollToBottom()
       return false
     } else if (
       this.term &&
       this.term.buffer.active.type === 'alternate'
     ) {
+      // A full-screen app (tmux, vim, less) owns the keyboard here, so every
+      // shortcut stays out of the way. Paste is the exception: the app has no
+      // way to ask for it, and bare Ctrl+V still reaches the app because vim
+      // binds it to visual-block mode (#3115).
+      if (
+        this.pasteShortcut &&
+        isAltBufferPasteCombo(
+          getKeyCombo(event),
+          getPasteShortcut(this),
+          isMacJs
+        )
+      ) {
+        return this.pasteShortcut(event)
+      }
       return true
     } else if (
       (key === 'ArrowLeft' || key === 'ArrowRight') &&
@@ -260,28 +292,10 @@ export function shortcutExtend (Cls) {
       }
     }
 
-    let codeName
-    if (type === 'mousedown' && button === 1) {
-      codeName = 'mouseWheel'
-    } else {
-      codeName = event instanceof window.WheelEvent
-        ? (wheelDeltaY > 0 ? 'mouseWheelUp' : 'mouseWheelDown')
-        : code
-    }
-
-    const codeK = getKeyCharacter(codeName)
-
-    const noControlKey = type !== 'mousedown' && !ctrlKey && !shiftKey && !metaKey && !altKey
-    if (noControlKey) {
+    const r = getKeyCombo(event)
+    if (!r) {
       return
     }
-    const r = codeName === 'mouseWheel'
-      ? 'mouseWheel'
-      : (ctrlKey ? 'ctrl+' : '') +
-      (metaKey ? 'meta+' : '') +
-      (shiftKey ? 'shift+' : '') +
-      (altKey ? 'alt+' : '') +
-      codeK.toLowerCase()
 
     const shortcutsConfig = buildConfig(this.props.config, d => !d.hidden)
     const keys = Object.keys(shortcutsConfig)
@@ -299,7 +313,9 @@ export function shortcutExtend (Cls) {
       const k = keys[i]
       const conf = shortcutsConfig[k]
       const funcName = conf.func + 'Shortcut'
-      if (conf.shortcut.split(',').includes(r)) {
+      // skip empty entries: a mouse click has no key code, so `r` can be
+      // empty and would match a shortcut that is unbound by default
+      if (matchesShortcut(r, conf.shortcut)) {
         if (this[funcName]) {
           return this[funcName](event)
         } else if (this.term && conf.readonly) {

@@ -1,14 +1,15 @@
 import {
   Form,
   Input,
+  InputNumber,
   Button,
   AutoComplete,
   Alert,
-  Space,
-  Dropdown
+  Select,
+  Space
 } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
-import { DownOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ReloadOutlined } from '@ant-design/icons'
 import Link from '../common/external-link'
 import AiCache from './ai-cache'
 import {
@@ -17,17 +18,13 @@ import {
 import Password from '../common/password'
 import AiHistory, { addHistoryItem } from './ai-history'
 import message from '../common/message'
-import { getAIPresets } from './ai-presets'
+import { getAIPresets, getAIModelOptions, findAIPreset, getPresetBaseURLs, normalizeAIBaseURL } from './ai-presets'
 import { appendMandatoryGuardrails } from './ai-guardrails'
+import './ai-config.styl'
 
 const STORAGE_KEY_CONFIG = 'ai_config_history'
 const EVENT_NAME_CONFIG = 'ai-config-history-update'
 const STORAGE_KEY_MODELS = 'ai_models_cache'
-
-// Model lists fetched from `<baseURL>/models`, cached per API URL
-function normalizeBaseURL (url) {
-  return (url || '').trim().replace(/\/+$/, '')
-}
 
 function readModelsCache () {
   try {
@@ -40,7 +37,7 @@ function readModelsCache () {
 }
 
 function getCachedModels (baseURL) {
-  const key = normalizeBaseURL(baseURL)
+  const key = normalizeAIBaseURL(baseURL)
   if (!key) {
     return []
   }
@@ -49,7 +46,7 @@ function getCachedModels (baseURL) {
 }
 
 function saveModelsToCache (baseURL, models) {
-  const key = normalizeBaseURL(baseURL)
+  const key = normalizeAIBaseURL(baseURL)
   if (!key) {
     return
   }
@@ -100,9 +97,12 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
   const [testing, setTesting] = useState(false)
   const [loadingModels, setLoadingModels] = useState(false)
   const [cachedModels, setCachedModels] = useState([])
+  // True while the list came from an explicit fetch rather than from the cache
+  const [modelsFetched, setModelsFetched] = useState(false)
   const baseURLAI = Form.useWatch('baseURLAI', form)
   const presets = useMemo(() => getAIPresets(), [])
-  const currentPreset = presets.find(p => p.baseURLAI === baseURLAI)
+  const currentPreset = findAIPreset(baseURLAI, presets)
+  const baseURLOptions = getPresetBaseURLs(currentPreset).map(value => ({ value }))
 
   useEffect(() => {
     if (initialValues) {
@@ -113,6 +113,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
   // Restore the model list previously fetched for this API URL
   useEffect(() => {
     setCachedModels(getCachedModels(baseURLAI))
+    setModelsFetched(false)
   }, [baseURLAI])
 
   function filter () {
@@ -164,7 +165,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
 
   async function handleLoadModels () {
     const values = form.getFieldsValue()
-    const baseURL = normalizeBaseURL(values.baseURLAI)
+    const baseURL = normalizeAIBaseURL(values.baseURLAI)
     if (!baseURL) {
       message.error('Please input API URL first')
       return
@@ -182,10 +183,12 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         message.error(res.error)
       } else if (res && res.models && res.models.length) {
         setCachedModels(res.models)
+        setModelsFetched(true)
         saveModelsToCache(baseURL, res.models)
         message.success(`Got ${res.models.length} models`)
         if (!values.modelAI) {
-          form.setFieldsValue({ modelAI: res.models[0] })
+          const options = getAIModelOptions(baseURL, null, res.models, true)
+          form.setFieldsValue({ modelAI: options[0]?.value })
         }
       } else {
         message.error('No models found in response')
@@ -210,18 +213,32 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
     form.setFieldsValue(values)
   }
 
-  function renderPresetMenu () {
-    const items = presets.map(p => ({
-      key: p.id,
-      label: p.nameAI,
-      onClick: () => handleSelectPreset(p)
+  // A plain antd Select, on purpose: it already scrolls its list inside the
+  // viewport (a Dropdown menu grows past the bottom of a phone screen, so the
+  // tail of the preset list is unreachable there) and `showSearch` filters it.
+  // `optionFilterProp` is load-bearing: without it rc-select filters on the
+  // option *value* (our id), so "gemini" or "llama" match nothing. The label
+  // carries name and model, so filtering on it finds either.
+  // The label/select sizing lives in `.ai-preset-row` (ai-config.styl), because
+  // Space's `.ant-space-item` wrapper is the flex item, not the child.
+  function renderPresetSelect () {
+    const options = presets.map(p => ({
+      value: p.id,
+      label: p.modelAI ? `${p.nameAI} · ${p.modelAI}` : p.nameAI
     }))
     return (
-      <Dropdown menu={{ items }} trigger={['click']}>
-        <Button>
-          {e('presets')} <DownOutlined />
-        </Button>
-      </Dropdown>
+      <div className='alignright'>
+        <Space className='mg1b width-100 ai-preset-row'>
+          <span>{e('presets')}</span>
+          <Select
+            showSearch
+            optionFilterProp='label'
+            options={options}
+            value={currentPreset?.id}
+            onSelect={id => handleSelectPreset(presets.find(p => p.id === id))}
+          />
+        </Space>
+      </div>
     )
   }
 
@@ -246,11 +263,28 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
     return 'API Key'
   }
 
+  // Presets with more than one host let the user pick one; single-host presets
+  // keep the plain input so custom endpoints never show an empty dropdown.
+  function renderApiURLInput () {
+    if (baseURLOptions.length < 2) {
+      return <Input placeholder='Enter API provider URL' style={{ width: '75%' }} />
+    }
+    // Keep every host visible: the input already holds one of them, so a
+    // value-based filter would hide the very URL the user wants to switch to.
+    return (
+      <AutoComplete
+        options={baseURLOptions}
+        filterOption={filter}
+        popupMatchSelectWidth={false}
+        style={{ width: '75%' }}
+      >
+        <Input placeholder='Enter API provider URL' />
+      </AutoComplete>
+    )
+  }
+
   function renderModelInput () {
-    const presetModels = (currentPreset?.modelAIs || [])
-      .map(o => (typeof o === 'string' ? o : o.value))
-    const values = [...presetModels, ...cachedModels].filter(Boolean)
-    const options = [...new Set(values)].map(value => ({ value }))
+    const options = getAIModelOptions(baseURLAI, currentPreset, cachedModels, modelsFetched)
     const title = 'Fetch model list from API URL'
     return (
       <AutoComplete
@@ -293,9 +327,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
         type='warning'
         className='mg2b'
       />
-      <div className='mg1b alignright'>
-        {renderPresetMenu()}
-      </div>
+      {renderPresetSelect()}
       <p>
         Full Url: {initialValues?.baseURLAI}{initialValues?.apiPathAI}
       </p>
@@ -325,10 +357,7 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
                 { type: 'url', message: 'Please enter a valid URL!' }
               ]}
             >
-              <Input
-                placeholder='Enter API provider URL'
-                style={{ width: '75%' }}
-              />
+              {renderApiURLInput()}
             </Form.Item>
             <Form.Item
               label='API PATH'
@@ -354,6 +383,19 @@ export default function AIConfigForm ({ initialValues, onSubmit, showAIConfig })
           rules={[{ required: true, message: 'Please input or select a model!' }]}
         >
           {renderModelInput()}
+        </Form.Item>
+
+        <Form.Item
+          label='Context length'
+          name='contextLengthAI'
+          tooltip='How many tokens this model can hold in one request. Leave empty to guess from the model name; the chat panel uses it to show how full the context is.'
+        >
+          <InputNumber
+            placeholder='auto (detect from model name)'
+            min={1000}
+            step={1000}
+            style={{ width: '100%' }}
+          />
         </Form.Item>
 
         <Form.Item

@@ -10,6 +10,8 @@ import {
   paneMap
 } from '../../../common/constants.js'
 import getProxy from '../../../common/get-proxy.js'
+import { credentialsFromProvider, connectedToProvider } from '../../../common/credential-provider.jsx'
+import { credentialOptions } from '../../../common/credential-provider-utils.js'
 import { refs } from '../../common/ref.js'
 import { createTerm, resizeTerm } from '../terminal-apis.js'
 import { ZmodemClient } from '../zmodem-client.js'
@@ -22,6 +24,11 @@ import {
   getAlternateBufferSnapshot,
   shouldCaptureTerminalReloadState
 } from '../ssh-reload-state.js'
+import {
+  needsInteractiveInput,
+  clearNeedsInteractiveInput
+} from '../interactive-prompt-state.js'
+import { decideSessionEnd } from '../session-end.js'
 
 // Expands \n \t \r \\ and \xHH hex byte escapes, used to let users type
 // control bytes (e.g. \x01 = Ctrl+A) in the serial "closeSequence" field.
@@ -78,7 +85,8 @@ export const socketMixin = {
   async remoteInit (term = this.term) {
     this.setState({
       loading: true,
-      terminalError: null
+      terminalError: null,
+      sessionStopped: false
     })
     const { cols, rows } = term
     const { config } = this.props
@@ -97,6 +105,8 @@ export const socketMixin = {
     const { savePassword } = this.state
     const termType = type
     const extra = this.props.sessionOptions
+    // A fresh attempt: any "needs input" mark belongs to the previous one.
+    clearNeedsInteractiveInput(id)
     // Determine if this is a local terminal (no host)
     const isLocalType = !tab.host
     // Build exec settings: only for local type, prefer tab settings over config
@@ -124,6 +134,10 @@ export const socketMixin = {
       }
     }
     const keepaliveInterval = tab.keepaliveInterval || config.keepaliveInterval
+    // Remember which executable this session actually spawned (profile- and
+    // bookmark-applied). `cd()` in term-attach needs the same answer to pick
+    // CMD vs PowerShell syntax; the global setting alone is not enough.
+    this.localShell = execOpts[execPropName] || ''
     const opts = clone({
       cols,
       rows,
@@ -154,6 +168,13 @@ export const socketMixin = {
     // Renderer-only state can contain a large serialized screen and must not
     // cross the process boundary as part of the SSH connection options.
     delete opts._reloadState
+    // a bookmark that asks a password manager for its password, when it has
+    // none saved: ssh and telnet both take it from the connection options
+    this.credentials = null
+    if (tab.authType !== 'privateKey') {
+      this.credentials = await credentialsFromProvider(tab)
+      Object.assign(opts, credentialOptions(this.credentials, tab.type))
+    }
     const isAutoReconnect = !!(tab.autoReConnect && this.props.config.autoReconnectTerminal)
     const r = await createTerm(opts)
       .catch(err => {
@@ -183,31 +204,40 @@ export const socketMixin = {
       loading: false
     })
     if (!r) {
-      if (isAutoReconnect) {
+      if (isAutoReconnect && !needsInteractiveInput(id)) {
         this.scheduleAutoReconnect(3000)
         return
       }
       this.setStatus(statusMap.error)
+      // The pane is dead even though the socket never opened. The notice itself
+      // stays hidden while `terminalError` is set - the error alert is already
+      // the message.
+      this.setState({ sessionStopped: true })
       return
     }
     this.port = r.port
     this.setStatus(statusMap.success)
+    connectedToProvider(tab, this.credentials)
     refs.get('sftp-' + id)?.initData(id, r.port)
     term.pid = id
     this.pid = id
     const wsUrl = this.buildWsUrl(r.port)
+    // A reused component (reload / auto reconnect) must not decide on the
+    // previous session's exit status.
+    this.sessionExit = null
     const socket = new WebSocket(wsUrl)
     socket.onclose = this.oncloseSocket
     socket.onerror = this.onerrorSocket
     this.socket = socket
     this.initSocketEvents()
+    this.trackSessionExit(socket)
     this.term = term
     socket.onopen = async () => {
       // attach addon is a dynamic import too — report a failed chunk fetch
       // instead of leaving an unhandled rejection behind
       try {
         await this.initAttachAddon()
-        this.startupQueue.runInitScript()
+        this.startupQueue.runInitScript(opts[execPropName])
       } catch (e) {
         console.error(e)
         this.handleError({ message: e.message })
@@ -282,6 +312,50 @@ export const socketMixin = {
     }
   },
 
+  /**
+   * The session server reports how the pty / ssh channel ended on this same
+   * socket, right before closing it, so a clean `exit` and a dropped
+   * connection do not look alike. Stored for `oncloseSocket`; see
+   * `session-end.js` for why the typed line is not the trigger.
+   */
+  trackSessionExit (socket) {
+    socket.addEventListener('message', (ev) => {
+      if (typeof ev.data !== 'string') {
+        return
+      }
+      let msg
+      try {
+        msg = JSON.parse(ev.data)
+      } catch (_e) {
+        return
+      }
+      if (!msg || msg.action !== 'session-exit') {
+        return
+      }
+      this.sessionExit = {
+        known: msg.known === true,
+        code: typeof msg.code === 'number' ? msg.code : null,
+        signal: msg.signal || null
+      }
+    })
+  },
+
+  /**
+   * Should this pane close now that its socket is gone?
+   * @returns {{ close: boolean, reason: string }}
+   */
+  sessionEndDecision () {
+    return decideSessionEnd({
+      exitStatus: this.sessionExit,
+      // Fallback only: backends that can not report a status (telnet, serial,
+      // a device that omits SSH exit-status) keep the old typed-line rule,
+      // time-boxed so a nested `exit` can not poison it.
+      userTypeExit: this.isUserTypeExit()
+      // closeOnCleanExit stays at its default (close, i.e. today's `exit`
+      // behaviour) until the keep-the-tab decision in #4629 is made.
+    })
+  },
+
   canReceiveBroadcast (termRef) {
     return (
       termRef.socket &&
@@ -316,11 +390,18 @@ export const socketMixin = {
     this.setStatus(
       statusMap.error
     )
-    if (this.userTypeExit) {
+    // Close the tab only when the session server said the pty ended cleanly.
+    // A dropped connection, a failed session or a backend that reports no
+    // status keeps the tab and its scrollback (#4629).
+    if (this.sessionEndDecision().close) {
       return this.props.delTab(this.props.tab.id)
     }
+    this.setState({ sessionStopped: true })
     const { autoReconnectTerminal } = this.props.config
-    if (autoReconnectTerminal) {
+    // A session that ended waiting for an interactive prompt can not come back
+    // by itself: the retry would ask for the code again and time out again,
+    // forever, stacking dead prompts over the window (#4634).
+    if (autoReconnectTerminal && !needsInteractiveInput(this.props.tab.id)) {
       this.scheduleAutoReconnect(3000)
     }
   },
@@ -343,7 +424,13 @@ export const socketMixin = {
       clearInterval(this.timers.reconnectCountdown)
       this.timers.reconnectCountdown = null
       this.setState({ reconnectCountdown: null })
-      if (this.onClose || !this.props.config.autoReconnectTerminal) {
+      if (
+        this.onClose ||
+        !this.props.config.autoReconnectTerminal ||
+        // re-checked here: the prompt may have been taken back while the
+        // countdown was running, and its message races the socket close
+        needsInteractiveInput(this.props.tab.id)
+      ) {
         return
       }
       const reconnectCount = (this.props.tab.autoReConnect || 0) + 1
@@ -362,6 +449,21 @@ export const socketMixin = {
   handleCancel () {
     const { id } = this.props.tab
     this.props.delTab(id)
+  },
+
+  /**
+   * The two buttons on session-status-overlay. The shortcut versions in
+   * shortcut-control.jsx act on the *active* tab; these act on this pane's own
+   * tab, so a click can never hit a neighbour, and they go through the same
+   * store calls (reloadTab captures the buffer for replay, delTab removes the
+   * tab) as the shortcuts.
+   */
+  handleReloadStoppedSession () {
+    this.props.reloadTab(this.props.tab)
+  },
+
+  handleCloseStoppedSession () {
+    this.props.delTab(this.props.tab.id)
   },
 
   /**

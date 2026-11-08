@@ -93,10 +93,32 @@ async function createStyleForTab (tab, props) {
         'background-image: none'
       )
     }
-  } else if (st !== 'none') {
+  } else if (st === 'none') {
+    // The [🚫] opt-out must be spelled out: this rule has a higher specificity
+    // than the global one, but an empty declaration block would still let the
+    // built-in default bg painted by createGlobalStyle show through.
+    styles.push('background-image: none')
+  } else {
     styles.push(
       `background-image: ${st}`,
       'background-position: center',
+      // createGlobalStyle's built-in default bg rule carries an auto-fit
+      // `background-size` (so the 766px wide watermark is not cropped on
+      // narrow panes), and for the active tab it targets this very same
+      // ::before. `background-size` is not reset by a rule that only sets
+      // `background-image`, so it would leak onto the user's image and scale
+      // it down to at most 766px, centred — a big image that used to fill the
+      // pane would no longer cover it. Stating the initial value keeps user
+      // images at their natural size, which is what they rendered at before
+      // the auto-fit was introduced.
+      // Cover mode (opt-in, per tab or global) flips that to `cover` so the
+      // image fills the whole pane instead of sitting at 1:1 in the middle.
+      `background-size: ${
+        (tab.terminalBackground?.terminalBackgroundCoverMode ||
+          props.terminalBackgroundCoverMode)
+          ? 'cover'
+          : 'auto'
+      }`,
       `filter: ${createFilterStyle(props, tab)}`
     )
   }
@@ -149,6 +171,9 @@ async function createGlobalStyle (props) {
       'background-position: center',
       `filter: ${createFilterStyle(props)}`
     )
+    if (props.terminalBackgroundCoverMode) {
+      styles.push('background-size: cover')
+    }
   }
 
   return `#container .session-batch-active .xterm-screen::before {
@@ -196,6 +221,7 @@ export default function CssOverwrite (props) {
   }, [
     configLoaded,
     props.terminalBackgroundImagePath,
+    props.terminalBackgroundCoverMode,
     props.terminalBackgroundFilterBlur,
     props.terminalBackgroundFilterOpacity,
     props.terminalBackgroundFilterBrightness,

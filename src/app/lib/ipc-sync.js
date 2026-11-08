@@ -8,7 +8,6 @@ const {
 } = require('electron')
 const log = require('../common/log')
 const constants = require('../common/runtime-constants')
-const windowMove = require('./window-drag-move.js')
 const globalState = require('./glob-state')
 const { transferKeys } = require('../server/transfer')
 const os = require('os')
@@ -46,7 +45,8 @@ module.exports = {
       return false
     }
   },
-  windowMove,
+  // the title bar the window was created with - a changed setting only applies after restart
+  isSystemTitleBar: () => !!globalState.get('systemTitleBar'),
   readClipboard: () => {
     return clipboard.readText()
   },
@@ -129,12 +129,11 @@ module.exports = {
         'unlink',
         'rmrf',
         'readdirAsync',
+        'readdirStatAsync',
         'readFile',
         'readFileAsBase64',
         'writeFile',
         'openFile',
-        'zipFolder',
-        'unzipFile',
         'readCustom',
         'exists',
         'readdir',
@@ -144,7 +143,11 @@ module.exports = {
         'openCustom',
         'closeCustom',
         'writeCustom',
-        'getFolderSize'
+        'getFolderSize',
+        // generate an ssh key pair on the machine the server runs on
+        'generateSshKeyPair',
+        // fetch a bookmark icon into <data dir>/icons
+        'saveIconFromUrl'
       ]
     }
   }

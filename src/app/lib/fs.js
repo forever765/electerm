@@ -2,12 +2,14 @@ const fss = require('fs/promises')
 const fs = require('fs')
 const log = require('../common/log')
 const path = require('path')
-const { isWin, isMac, tempDir } = require('../common/runtime-constants')
-const uid = require('../common/uid')
+const { isWin, isMac } = require('../common/runtime-constants')
 const { promisify } = require('util')
-const { exec, spawn } = require('child_process')
+const { exec, execFile, spawn } = require('child_process')
 const execAsync = promisify(exec)
+const execFileAsync = promisify(execFile)
 const { getSizeCount, getSizeCountWin } = require('../common/get-folder-size-and-file-count.js')
+const { readdirStat, normalizeDirPath } = require('../common/readdir-stat')
+const { generateSshKeyPair } = require('../common/ssh-keygen')
 
 const ROOT_PATH = '/'
 
@@ -23,10 +25,6 @@ function encodeUint8Array (uint8Arr) {
 // Decoding function
 function decodeBase64String (base64String) {
   return new Uint8Array(Buffer.from(base64String, 'base64'))
-}
-
-const isWinDrive = function (path) {
-  return /^\w+:$/.test(path)
 }
 
 /**
@@ -45,11 +43,34 @@ const run = (cmd) => {
 }
 
 /**
- * run windows cmd
- * @param {string} cmd
+ * build the powershell.exe argument vector for a script.
+ * the script is passed base64 encoded (UTF-16LE, powershell's -EncodedCommand)
+ * as one argv entry, so powershell.exe is spawned directly with no cmd.exe
+ * layer in between. that matters because a cmd.exe layer adds a double quote
+ * context that no amount of escaping on the script side can control: a local
+ * folder name containing `"` used to close the wrapper early and let `&`
+ * reach cmd.exe as a command separator. see GHSA-ph25-cg2g-62cf
+ * @param {string} cmd powershell script
+ * @returns {string[]}
+ */
+const buildWinCmdArgs = (cmd) => {
+  return [
+    '-NoLogo',
+    '-NonInteractive',
+    '-NoProfile',
+    '-EncodedCommand',
+    Buffer.from(String(cmd), 'utf16le').toString('base64')
+  ]
+}
+
+/**
+ * run windows cmd, without a cmd.exe layer
+ * @param {string} cmd powershell script
  */
 const runWinCmd = (cmd) => {
-  return execAsync(`powershell.exe -Command "${cmd}"`)
+  return execFileAsync('powershell.exe', buildWinCmdArgs(cmd), {
+    windowsHide: true
+  })
 }
 
 function spawnDetachedCommand (command, args, options = {}) {
@@ -104,17 +125,24 @@ function escapePosixShellArg (value) {
 }
 
 /**
- * Escape a string for safe use inside PowerShell single-quoted strings.
- * Single quotes are escaped by doubling them:  '  ->  ''
+ * Build the local Windows folder-size script for a path.
+ * The path travels base64-encoded and is decoded inside the script, so no
+ * character of the folder name is ever seen by the PowerShell parser. That
+ * matters because PowerShell treats the typographic quotes U+2018/U+2019/
+ * U+201A/U+201B as ordinary single-quote delimiters, so escaping only the ASCII
+ * apostrophe let a folder name close the literal and run the rest of its name
+ * as code. See GHSA-h4v2-5hq4-wc2g.
+ * @param {string} folderPath
+ * @returns {string}
  */
-function escapePowerShellArg (value) {
-  return String(value).replace(/'/g, "''")
+function buildFolderSizeWinScript (folderPath) {
+  const encoded = encodeUtf8Base64(folderPath)
+  return `$p=[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${encoded}'));Get-ChildItem -LiteralPath $p -Recurse | Where-Object { ! $_.PSIsContainer } | Measure-Object -Property Length -Sum`
 }
 
 function getFolderSizeWin (folderPath) {
-  const safePath = escapePowerShellArg(folderPath)
   return runWinCmd(
-    `Get-ChildItem -Path '${safePath}' -Recurse | Where-Object { ! $_.PSIsContainer } | Measure-Object -Property Length -Sum`
+    buildFolderSizeWinScript(folderPath)
   ).then(res => getSizeCountWin(res.stdout))
 }
 
@@ -213,58 +241,6 @@ const openFile = (localFilePath) => {
   return spawnDetachedCommand(isMac ? 'open' : 'xdg-open', [localFilePath])
 }
 
-/**
- * zip file
- * @param {string} localFolerPath absolute path of a folder
- */
-const zipFolder = (localFolerPath) => {
-  const n = uid()
-  const p = path.resolve(tempDir, `electerm-temp-${n}.tar`)
-  const cwd = path.dirname(localFolerPath)
-  const file = path.basename(localFolerPath)
-  const tar = require('tar')
-  return tar.c({
-    gzip: false,
-    file: p,
-    cwd
-  }, [file])
-    .then(() => p)
-}
-
-const handleWindowsDrive = async (localFilePath, targetFolderPath) => {
-  const tar = require('tar')
-  const tempExtractDir = path.join(tempDir, `electerm-unzip-${uid()}`)
-  await fss.mkdir(tempExtractDir, { recursive: true })
-
-  try {
-    await tar.x({ file: localFilePath, C: tempExtractDir })
-    const items = await fss.readdir(tempExtractDir)
-
-    await Promise.all(items.map(async (item) => {
-      const from = path.join(tempExtractDir, item)
-      const to = path.join(targetFolderPath, item)
-      await mv(from, to)
-    }))
-  } finally {
-    await rmrf(tempExtractDir).catch(log.error)
-  }
-}
-
-/**
- * unzip file
- * @param {string} localFilePath absolute path of a zip file
- * @param {string} targetFolderPath absolute path of unzip target folder
- */
-const unzipFile = async (localFilePath, targetFolderPath) => {
-  const tar = require('tar')
-  if (isWin && isWinDrive(targetFolderPath)) {
-    await handleWindowsDrive(localFilePath, targetFolderPath)
-  } else {
-    await tar.x({ file: localFilePath, C: targetFolderPath })
-  }
-  return 1
-}
-
 async function listWindowsRootPath () {
   const drives = await new Promise((resolve, reject) => {
     const { exec } = require('child_process')
@@ -357,6 +333,21 @@ const statCustom = async (...args) => {
   return st
 }
 
+/**
+ * Directory listing with per-entry info in a single round trip, see
+ * src/app/common/readdir-stat.js
+ */
+async function readdirStatAsync (_path) {
+  return readdirStat(_path, await readdirNames(_path))
+}
+
+async function readdirNames (_path) {
+  if (_path === ROOT_PATH && isWin) {
+    return listWindowsRootPath()
+  }
+  return fss.readdir(normalizeDirPath(_path))
+}
+
 const fsExport = Object.assign(
   {},
   fss,
@@ -369,25 +360,18 @@ const fsExport = Object.assign(
     cp,
     mv,
     openFile,
-    zipFolder,
-    unzipFile,
     readCustom,
     writeCustom,
     openCustom,
     closeCustom,
-    statCustom
+    statCustom,
+    readdirStatAsync,
+    generateSshKeyPair,
+    // download an icon into <data dir>/icons, see lib/icon-download.js
+    saveIconFromUrl: (...args) => require('./icon-download').saveIconFromUrl(...args)
   },
   {
-    readdirAsync: (_path) => {
-      if (_path === ROOT_PATH && isWin) {
-        return listWindowsRootPath()
-      }
-      let path = _path
-      if (isWin && isWinDrive(path)) {
-        path = path + '\\'
-      }
-      return fss.readdir(path)
-    },
+    readdirAsync: readdirNames,
     statAsync: (...args) => {
       return fss.stat(...args)
         .then(res => {
@@ -428,5 +412,8 @@ const fsExport = Object.assign(
 )
 
 module.exports = {
-  fsExport
+  fsExport,
+  // not part of fsExport: this is not something the renderer may call
+  buildWinCmdArgs,
+  buildFolderSizeWinScript
 }

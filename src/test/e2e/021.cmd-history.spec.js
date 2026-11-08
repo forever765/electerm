@@ -29,6 +29,11 @@ const e = require('./common/lang')
 /** Open the command-history popover in the footer.
  *  Closes any currently-open popover first so we get a clean open. */
 async function openHistoryPopover (client) {
+  // The history panel has two homes — the footer popover and the right side
+  // panel — and the choice is a persisted preference, so a developer who left it
+  // docked would otherwise get the right panel here instead of the popover.
+  await client.evaluate(() => window.store.setCmdHistoryInRightPanel(false))
+  await delay(200)
   // Click outside any popover to ensure it is closed before reopening
   await client.click('.session-current .term-wrap')
   await delay(400)
@@ -80,7 +85,7 @@ async function openItemMenu (client, term) {
 /** Delete a history item through its action menu (⋯ -> Delete). */
 async function deleteHistoryItem (client, term) {
   await openItemMenu(client, term)
-  await client.click(`.ant-dropdown-menu-item:has-text("${e('del')}")`)
+  await client.click(`.cmd-history-menu-item:has-text("${e('del')}")`)
   await delay(600)
 }
 
@@ -213,6 +218,11 @@ describe('cmd-history', function () {
     await client.click('.add-menu-wrap .context-item:has-text("New tab")')
     await delay(2500)
     expect(await client.countElem('.tabs .tab')).equal(2)
+    // The add panel does not close itself when one of its entries runs (only a
+    // click outside does), and it covers part of the terminal area, so it would
+    // intercept the click below. Collapse it explicitly, like the other specs.
+    await client.click('.tabs .tabs-add-btn')
+    await client.locator('.add-menu-wrap').waitFor({ state: 'hidden', timeout: 5000 })
 
     await runInTerminal(client, cmd)
     expect((await getStoredHistory(client)).includes(cmd)).equal(true)
@@ -220,7 +230,7 @@ describe('cmd-history', function () {
     // ── action menu -> create quick command ───────────────────────────────────
     await openHistoryPopover(client)
     await openItemMenu(client, cmd)
-    await client.click(`.ant-dropdown-menu-item:has-text("${e('addQuickCommands')}")`)
+    await client.click(`.cmd-history-menu-item:has-text("${e('addQuickCommands')}")`)
     await delay(2000)
 
     // the shared quick command form, prefilled with the history command
@@ -245,7 +255,7 @@ describe('cmd-history', function () {
     // ── action menu -> run in multiple terminals ──────────────────────────────
     await openHistoryPopover(client)
     await openItemMenu(client, cmd)
-    await client.click(`.ant-dropdown-menu-item:has-text("${e('runInAllTerminals')}")`)
+    await client.click(`.cmd-history-menu-item:has-text("${e('runInAllTerminals')}")`)
     await delay(2000)
     expect(await client.countElem('.multi-tab-run-cmd')).equal(1)
 

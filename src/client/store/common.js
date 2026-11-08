@@ -5,14 +5,20 @@
 import handleError from '../common/error-handler'
 import Modal from '../components/common/modal'
 import { appendMandatoryGuardrails } from '../components/ai/ai-guardrails'
+import { buildSessionMessages } from '../components/ai/ai-context'
+import { COMPRESS_SUMMARY_PROMPT } from '../components/ai/ai-auto-compress'
 import { debounce, some, get, pickBy } from 'lodash-es'
 import {
   leftSidePanelWidthKey,
   leftSideBarOpenKey,
   rightSidebarWidthKey,
+  rightPanelPinnedKey,
+  cmdHistoryInRightPanelKey,
+  quickCommandsInRightPanelKey,
   addPanelWidthLsKey,
   connectionMap,
   lastAiChatSessionIdKey,
+  aiAutoCompressLsKey,
   mobileBreakpoint,
   splitMap,
   settingAiId,
@@ -24,7 +30,7 @@ import { requireTermOfUse } from '../common/term-of-use'
 import { action } from 'manate'
 import uid from '../common/uid'
 import deepCopy from 'json-deep-copy'
-import { aiConfigsArr } from '../components/ai/ai-config-props'
+import { aiConfigsArr, optionalAIConfigsArr } from '../components/ai/ai-config-props'
 
 const e = window.translate
 const { assign } = Object
@@ -41,6 +47,18 @@ export default Store => {
   Store.prototype.updateConfig = function (ext) {
     window.store.setConfig(ext)
   }
+
+  // The footer info icon is a toggle: the same click opens and closes the
+  // panel, so the trigger never has to be hunted down in the panel header.
+  Store.prototype.toggleInfoPanel = action(function () {
+    const { store } = window
+    const isOpen = store.rightPanelVisible && store.rightPanelTab === 'info'
+    store.rightPanelVisible = !isOpen
+    store.rightPanelTab = 'info'
+    if (!isOpen) {
+      store.openInfoPanelAction()
+    }
+  })
 
   Store.prototype.openInfoPanel = action(function () {
     const { store } = window
@@ -122,7 +140,13 @@ export default Store => {
     Object.assign(window.store._termSearchOptions, update)
   }
 
+  // Both panel widths are desktop-only preferences: on mobile the panel is a
+  // full-width drawer whose width is fixed, so a drag (or any other caller)
+  // must not overwrite the desktop value that is still in localStorage.
   Store.prototype.setLeftSidePanelWidth = function (v) {
+    if (window.store.isMobile) {
+      return
+    }
     ls.setItem(leftSidePanelWidthKey, v)
     window.store._leftSidePanelWidth = v
   }
@@ -144,8 +168,115 @@ export default Store => {
   }
 
   Store.prototype.setRightSidePanelWidth = function (v) {
+    if (window.store.isMobile) {
+      return
+    }
     ls.setItem(rightSidebarWidthKey, v)
     window.store._rightPanelWidth = v
+  }
+
+  // Persist the pin the same way the left sidebar does (sidebarPinnedKey):
+  // pinned is a durable layout preference, not a per-session toggle. It matters
+  // more here because pinned and unpinned are visibly different modes — the
+  // unpinned panel is an overlay that clears the footer, the pinned one is a
+  // full-height dock.
+  Store.prototype.setRightPanelPinned = function (v) {
+    ls.setItem(rightPanelPinnedKey, v + '')
+    window.store.rightPanelPinned = v
+  }
+
+  // The cmd history panel has two homes: the footer popover (the default) and
+  // the right side panel. Which one it is in is a durable preference, persisted
+  // like the right panel pin — the footer trigger has to keep landing where the
+  // user last put the panel, or the choice would only survive until the next
+  // reload.
+  Store.prototype.setCmdHistoryInRightPanel = function (v) {
+    ls.setItem(cmdHistoryInRightPanelKey, v + '')
+    window.store.cmdHistoryInRightPanel = v
+  }
+
+  Store.prototype.openCmdHistoryPanel = function () {
+    const { store } = window
+    store.rightPanelVisible = true
+    store.rightPanelTab = 'cmdHistory'
+  }
+
+  // Same toggle contract as toggleInfoPanel/toggleAIPanel: while the history
+  // lives in the right panel, the footer trigger opens and closes it.
+  Store.prototype.toggleCmdHistoryPanel = function () {
+    const { store } = window
+    if (store.rightPanelVisible && store.rightPanelTab === 'cmdHistory') {
+      store.rightPanelVisible = false
+      return
+    }
+    store.openCmdHistoryPanel()
+  }
+
+  Store.prototype.moveCmdHistoryToRightPanel = function () {
+    const { store } = window
+    store.setCmdHistoryInRightPanel(true)
+    store.openCmdHistoryPanel()
+  }
+
+  // Hand the panel back to the footer popover and open it there: the move has
+  // to be visible, otherwise the panel just looks like it vanished.
+  Store.prototype.moveCmdHistoryToFooter = function () {
+    const { store } = window
+    store.setCmdHistoryInRightPanel(false)
+    if (store.rightPanelTab === 'cmdHistory') {
+      store.rightPanelVisible = false
+    }
+    refsStatic.get('CmdHistory')?.openPopover()
+  }
+
+  // The quick command panel has the same two homes as the cmd history one, and
+  // the same durable preference: the footer popup (the default) and the right
+  // side panel. The footer popup is not a popover but a floating box driven by
+  // store.openQuickCommandBar, so "docked" is expressed by the preference alone
+  // and the box itself decides which of its two forms to render.
+  Store.prototype.setQuickCommandsInRightPanel = function (v) {
+    ls.setItem(quickCommandsInRightPanelKey, v + '')
+    window.store.quickCommandsInRightPanel = v
+  }
+
+  Store.prototype.openQuickCommandsPanel = function () {
+    const { store } = window
+    store.rightPanelVisible = true
+    store.rightPanelTab = 'quickCommands'
+  }
+
+  // Same toggle contract as toggleInfoPanel/toggleAIPanel/toggleCmdHistoryPanel:
+  // while the panel lives in the right panel, the footer Q opens and closes it.
+  Store.prototype.toggleQuickCommandsPanel = function () {
+    const { store } = window
+    if (store.rightPanelVisible && store.rightPanelTab === 'quickCommands') {
+      store.rightPanelVisible = false
+      return
+    }
+    store.openQuickCommandsPanel()
+  }
+
+  Store.prototype.moveQuickCommandsToRightPanel = function () {
+    const { store } = window
+    store.setQuickCommandsInRightPanel(true)
+    // the footer box would otherwise be left floating over a terminal it no
+    // longer owns; the pin is deliberately kept, so handing the panel back
+    // restores the exact shape it had before
+    store.openQuickCommandBar = false
+    store.openQuickCommandsPanel()
+  }
+
+  // Hand the panel back to the footer and open it there: the move has to be
+  // visible, otherwise the panel just looks like it vanished. A pin that was
+  // left on while docked brings the box back pinned, which is what the user
+  // last asked for.
+  Store.prototype.moveQuickCommandsToFooter = function () {
+    const { store } = window
+    store.setQuickCommandsInRightPanel(false)
+    if (store.rightPanelTab === 'quickCommands') {
+      store.rightPanelVisible = false
+    }
+    store.openQuickCommandBar = true
   }
   Store.prototype.beforeExit = function (evt) {
     const { confirmBeforeExit } = window.store.config
@@ -286,6 +417,18 @@ export default Store => {
     }
   }
 
+  // Same toggle contract as toggleInfoPanel: the footer AI button opens and
+  // closes its own panel. The open path must go through handleOpenAIPanel so
+  // the missing-config prompt still fires; closing must not touch config.
+  Store.prototype.toggleAIPanel = function () {
+    const { store } = window
+    if (store.rightPanelVisible && store.rightPanelTab === 'ai') {
+      store.rightPanelVisible = false
+      return
+    }
+    store.handleOpenAIPanel()
+  }
+
   Store.prototype.explainWithAi = function (txt) {
     const { store } = window
     store.handleOpenAIPanel()
@@ -303,13 +446,33 @@ export default Store => {
     })
   }
 
+  // Update one entry immutably. Both halves matter:
+  // - the store only notifies subscribers on a property write, so mutating the
+  //   entry in place leaves the panel rendering what it already had;
+  // - the transcript is memo()'d per entry, and a memo() comparison of an entry
+  //   that was mutated in place compares the object with itself, so React can
+  //   never see the change and the entry stops updating.
+  Store.prototype.updateAiHistoryEntry = function (id, updates) {
+    const { aiChatHistory } = window.store
+    const index = aiChatHistory.findIndex(d => d.id === id)
+    if (index === -1) {
+      return
+    }
+    const next = [...aiChatHistory]
+    next[index] = { ...next[index], ...updates }
+    window.store.aiChatHistory = next
+  }
+
   Store.prototype.removeAiHistory = function (id) {
     const { store } = window
     const index = store.aiChatHistory.findIndex(d => d.id === id)
     if (index === -1) {
       return
     }
-    window.store.aiChatHistory.splice(index, 1)
+    // Reassign instead of splice: the store only notifies subscribers on a
+    // property write, so an in-place mutation leaves the panel rendering the
+    // list it already had.
+    window.store.aiChatHistory = store.aiChatHistory.filter(d => d.id !== id)
   }
 
   Store.prototype.startNewChat = action(function () {
@@ -342,8 +505,17 @@ export default Store => {
     store.startNewChat()
   })
 
+  // One compression per session at a time. The placeholder entry is published
+  // before the summary arrives, so a second call (auto compress firing while a
+  // manual one is still waiting on the provider) would summarize the
+  // placeholder and append a second one.
+  const compressingSessions = new Set()
+
   Store.prototype.compressChatSession = async function (sessionId) {
     const { store } = window
+    if (!sessionId || compressingSessions.has(sessionId)) {
+      return
+    }
     const sessionEntries = store.aiChatHistory
       .filter(h => h.chatSessionId === sessionId)
       .sort((a, b) => a.timestamp - b.timestamp)
@@ -367,60 +539,27 @@ export default Store => {
 
     const firstEntry = sessionEntries[0]
     const lang = firstEntry.languageAI || store.getLangName()
-    const messages = [
-      { role: 'system', content: appendMandatoryGuardrails(firstEntry.roleAI + `;用[${lang}]回复`) }
-    ]
+    // Same message list the chat turn would send (including the response of
+    // every entry), so the summary describes the conversation the model
+    // actually saw.
+    const messages = buildSessionMessages({
+      history: store.aiChatHistory,
+      chatSessionId: sessionId,
+      role: appendMandatoryGuardrails(firstEntry.roleAI + `;用[${lang}]回复`)
+    })
 
-    // Start from the last compress entry to include its summary as context
-    const startIndex = lastCompressIndex >= 0 ? lastCompressIndex : 0
-    for (let i = startIndex; i < sessionEntries.length; i++) {
-      const entry = sessionEntries[i]
-      if (entry.compressed) {
-        messages.push({
-          role: 'user',
-          content: `Here is a summary of our previous conversation for context:\n\n${entry.response}`
-        })
-        messages.push({
-          role: 'assistant',
-          content: 'Understood. I will use this context as we continue.'
-        })
-      } else {
-        messages.push({
-          role: 'user',
-          content: entry.promptWithAttachments || entry.prompt
-        })
-        if (entry.response) {
-          messages.push({ role: 'assistant', content: entry.response })
-        }
-      }
-    }
+    // The same closing request the agent loop's auto compression sends (see
+    // components/ai/ai-compress.js), so both paths summarize alike.
+    messages.push({ role: 'user', content: COMPRESS_SUMMARY_PROMPT })
 
-    const summaryPrompt = 'Please summarize the above conversation concisely. Include key information, decisions, context, and any important details that would be needed to continue this conversation effectively.'
-    messages.push({ role: 'user', content: summaryPrompt })
-
-    const aiResponse = await window.pre.runGlobalAsync(
-      'AIchat',
-      summaryPrompt,
-      firstEntry.modelAI,
-      firstEntry.roleAI,
-      firstEntry.baseURLAI,
-      firstEntry.apiPathAI,
-      firstEntry.apiKeyAI,
-      firstEntry.proxyAI,
-      false,
-      firstEntry.authHeaderNameAI,
-      messages
-    )
-
-    if (aiResponse && aiResponse.error) {
-      return store.onError(new Error(aiResponse.error))
-    }
-
-    const summary = aiResponse.response || ''
+    // Show the entry before asking for the summary, and fill it in when the
+    // answer arrives. The request takes as long as any other AI request (much
+    // longer for a nearly full session), and a click that changes nothing on
+    // screen for that long reads as "compress did not work".
     const compressedEntry = {
       id: uid(),
       prompt: '*Compressed session summary*',
-      response: summary,
+      response: '*Summarizing the session…*',
       isStreaming: false,
       pending: false,
       sessionId: null,
@@ -440,9 +579,58 @@ export default Store => {
       compressed: true
     }
 
-    // Append compress entry, preserve existing history
-    store.aiChatHistory.push(compressedEntry)
+    // Append compress entry, preserve existing history. Reassign rather than
+    // push for the same reason as removeAiHistory -- the panel has to see the
+    // new context size, which is the whole point of compressing.
+    store.aiChatHistory = [...store.aiChatHistory, compressedEntry]
+    compressingSessions.add(sessionId)
+
+    // Anything short of a usable summary takes the placeholder away again: an
+    // empty summary must never replace the conversation, and a half finished
+    // one must not look like a result.
+    const fail = (msg) => {
+      store.removeAiHistory(compressedEntry.id)
+      return store.onError(new Error(msg))
+    }
+
+    try {
+      const aiResponse = await window.pre.runGlobalAsync(
+        'AIchat',
+        COMPRESS_SUMMARY_PROMPT,
+        firstEntry.modelAI,
+        firstEntry.roleAI,
+        firstEntry.baseURLAI,
+        firstEntry.apiPathAI,
+        firstEntry.apiKeyAI,
+        firstEntry.proxyAI,
+        false,
+        firstEntry.authHeaderNameAI,
+        messages
+      )
+
+      if (aiResponse && aiResponse.error) {
+        return fail(aiResponse.error)
+      }
+
+      const summary = (aiResponse && aiResponse.response) || ''
+      if (!summary.trim()) {
+        return fail('Compression failed: empty summary from AI')
+      }
+      store.updateAiHistoryEntry(compressedEntry.id, { response: summary })
+    } finally {
+      compressingSessions.delete(sessionId)
+    }
   }
+
+  // Auto compression, both modes: ask turns and the agent loop read this flag
+  // before every request (see components/ai/ai-compress.js), and the panel's
+  // auto compress popover writes it. Persisted so the choice survives a reload.
+  Store.prototype.setAiAutoCompress = action(function (val) {
+    const { store } = window
+    const on = !!val
+    store.aiAutoCompress = on
+    ls.setItem(aiAutoCompressLsKey, on ? 'true' : 'false')
+  })
 
   Store.prototype.toggleChatSessions = action(function () {
     const { store } = window
@@ -522,7 +710,9 @@ export default Store => {
   }
 
   Store.prototype.aiConfigMissing = function () {
-    return aiConfigsArr.filter(k => k !== 'apiKeyAI' && k !== 'proxyAI' && k !== 'nameAI').some(k => !window.store.config[k])
+    return aiConfigsArr
+      .filter(k => !optionalAIConfigsArr.includes(k))
+      .some(k => !window.store.config[k])
   }
 
   Store.prototype.clearHistory = function () {

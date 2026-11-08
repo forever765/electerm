@@ -4,7 +4,9 @@ const {
   test: it
 } = require('@playwright/test')
 const { describe } = it
-it.setTimeout(100000)
+// Four providers, each one a real request to a real server, with waits on the
+// store instead of on the clock -- see waitSyncSettled below.
+it.setTimeout(600000)
 const delay = require('./common/wait')
 const log = require('./common/log')
 const { expect } = require('./common/expect')
@@ -22,6 +24,47 @@ const {
   CUSTOM_SYNC_SECRET,
   CLOUD_TOKEN
 } = process.env
+// password used for the cloud round-trip check below; override via env
+// when the e2e cloud account already has a sync password set
+const CLOUD_SYNC_PASSWORD = process.env.CLOUD_SYNC_PASSWORD || 'electerm-cloud-e2e-pass'
+
+// gitee regularly needs 30s+ to answer from a CI runner, and nothing in the
+// request path carries a short timeout (the ws bridge allows 120s), so these
+// are generous on purpose.
+const syncSettleTimeout = 90000
+const bookmarkWaitTimeout = 20000
+
+// store.isSyncingSetting drives the <Spin> that wraps the whole sync panel
+// (setting-sync.jsx). While a request is in flight antd lays a blur overlay
+// over the form and that overlay eats pointer events, so a click landing during
+// it retries until it times out -- which is how this spec failed with
+// "ant-spin-container intercepts pointer events". Fixed delays cannot fix that,
+// because the panel stays covered for however long the server takes.
+async function waitSyncSettled (client) {
+  // The click handler is async, so the flag can still read false right after
+  // the click even though a request is about to start. Give it a moment to go
+  // busy, then wait for it to clear again. A request that never went busy
+  // (nothing to do, or already finished) settles immediately.
+  await client.waitForFunction(
+    () => window.store.isSyncingSetting === true,
+    null, { timeout: 3000 }
+  ).catch(() => {})
+  await client.waitForFunction(
+    () => window.store.isSyncingSetting !== true,
+    null, { timeout: syncSettleTimeout }
+  )
+}
+
+// The download only has to reach the store eventually. The old fixed delay
+// read the store too early and turned a merely slow gitee into a bare
+// `expected true, received false` with no hint that waiting would have fixed it.
+async function waitBookmarks (client, min = 3) {
+  await client.waitForFunction(
+    n => (window.store.bookmarks || []).length > n,
+    min,
+    { timeout: bookmarkWaitTimeout }
+  )
+}
 
 describe('data sync', function () {
   it('should open sync page', async function () {
@@ -52,9 +95,10 @@ describe('data sync', function () {
     await client.setValue('#sync-input-gistId-github', GIST_ID)
     await delay(1000)
     await client.click('.setting-wrap .sync-btn-save')
-    await delay(5000)
+    await waitSyncSettled(client)
     await client.click('.setting-wrap .sync-btn-down')
-    await delay(5000)
+    await waitSyncSettled(client)
+    await waitBookmarks(client)
     const bks = await client.evaluate(() => {
       return window.store.bookmarks
     })
@@ -73,9 +117,10 @@ describe('data sync', function () {
     await client.setValue('#sync-input-gistId-gitee', GITEE_ID)
     await delay(1000)
     await client.click('.setting-wrap .sync-btn-save:visible')
-    await delay(6000)
+    await waitSyncSettled(client)
     await client.click('.setting-wrap .sync-btn-down:visible')
-    await delay(6000)
+    await waitSyncSettled(client)
+    await waitBookmarks(client)
     const bks1 = await client.evaluate(() => {
       return window.store.bookmarks
     })
@@ -95,46 +140,61 @@ describe('data sync', function () {
     await client.setValue('#sync-input-gistId-custom', CUSTOM_SYNC_USER)
     await delay(1000)
     await client.click('.setting-wrap .sync-btn-save:visible')
-    await delay(6000)
+    await waitSyncSettled(client)
     await client.click('.setting-wrap .sync-btn-down:visible')
-    await delay(6000)
+    await waitSyncSettled(client)
+    await waitBookmarks(client)
     const bks3 = await client.evaluate(() => {
       return window.store.bookmarks
     })
     expect(bks3.length > 3).equal(true)
     await checkNoError()
 
-    log('018.sync.spec.js: save cloud props')
+    log('0192.sync.spec.js: save cloud props')
 
     await client.click('.setting-wrap [id*="tab-cloud"]')
-    log('018.sync.spec.js: cloud tab clicked')
+    log('0192.sync.spec.js: cloud tab clicked')
     await delay(3000)
 
     await client.setValue('#sync-input-token-cloud', CLOUD_TOKEN)
-    log('018.sync.spec.js: cloud token set')
+    // sync password: bookmarks/profiles get encrypted client-side
+    // (aes-256-gcm) before upload, so the server only ever sees ciphertext
+    await client.setValue('#sync-input-syncPassword-cloud', CLOUD_SYNC_PASSWORD)
+    log('0192.sync.spec.js: cloud token set')
     await delay(1000)
     await client.click('.setting-wrap .sync-btn-save:visible')
-    log('018.sync.spec.js: cloud save clicked')
-    await delay(6000)
+    log('0192.sync.spec.js: cloud save clicked')
+    await waitSyncSettled(client)
     await client.click('.setting-wrap .sync-btn-up:visible')
-    log('018.sync.spec.js: cloud up clicked')
-    await delay(6000)
+    log('0192.sync.spec.js: cloud up clicked')
+    await waitSyncSettled(client)
+
+    log('0192.sync.spec.js: verify server data is ciphertext')
+    const serverBkStr = await client.evaluate(async () => {
+      const gist = await window.store.previewServerData('cloud')
+      return gist.files['bookmarks.json'].content
+    })
+    expect(serverBkStr.startsWith('gcm:')).equal(true)
+    expect(serverBkStr.includes('password')).equal(false)
+    log('0192.sync.spec.js: server bookmarks encrypted')
+
     await client.evaluate(() => {
       return window.store.setBookmarks([])
     })
-    log('018.sync.spec.js: bookmarks cleared')
+    log('0192.sync.spec.js: bookmarks cleared')
     await client.click('.setting-wrap .sync-btn-down:visible')
-    log('018.sync.spec.js: cloud down clicked')
-    await delay(6000)
+    log('0192.sync.spec.js: cloud down clicked')
+    await waitSyncSettled(client)
+    await waitBookmarks(client)
     const bks4 = await client.evaluate(() => {
       return window.store.bookmarks
     })
     expect(bks4.length > 3).equal(true)
-    log('018.sync.spec.js: cloud sync verified')
+    log('0192.sync.spec.js: cloud sync verified')
 
     await delay(1000)
-    log('018.sync.spec.js: calling close')
+    log('0192.sync.spec.js: calling close')
     await closeApp(electronApp, __filename)
-    log('018.sync.spec.js: app closed')
+    log('0192.sync.spec.js: app closed')
   })
 })

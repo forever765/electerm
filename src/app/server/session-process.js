@@ -1,5 +1,7 @@
 const { fork } = require('child_process')
 const path = require('path')
+const log = require('../common/log')
+const { getFreePort } = require('../lib/free-port')
 
 // Map to store active terminal processes (pid -> {child, port, ws})
 const activeTerminals = new Map()
@@ -23,25 +25,21 @@ function getPort (fromPort = MIN_PORT) {
   // Mark this port as pending
   pendingPorts.add(startPort)
 
-  return new Promise((resolve, reject) => {
-    require('find-free-port')(startPort, '127.0.0.1', function (err, freePort) {
-      if (err) {
-        // Remove from pending set on error
-        pendingPorts.delete(startPort)
-        reject(err)
-      } else {
-        // Remember this port for next time
-        lastPort = freePort
-        // Remove from pending set when done
-        pendingPorts.delete(startPort)
-        resolve(freePort)
-      }
+  // bind probe, not connect probe: see ../lib/free-port.js -- a Windows
+  // reserved port looks free to a connect and then refuses to bind
+  return getFreePort({ from: startPort, host: '127.0.0.1' })
+    .then(freePort => {
+      // Remember this port for next time
+      lastPort = freePort
+      return freePort
     })
-  })
+    .finally(() => {
+      pendingPorts.delete(startPort)
+    })
 }
 
 async function runSessionServer (type, port) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const cleanEnv = Object.assign({}, process.env)
     delete cleanEnv.ELECTRON_RUN_AS_NODE
     const child = fork(path.resolve(__dirname, './session-server.js'), {
@@ -59,10 +57,22 @@ async function runSessionServer (type, port) {
         throw error || stderr
       }
     })
+    // a server that cannot bind used to leave this promise pending forever, so
+    // the tab just hung with no message -- surface it as a failed connection
     child.on('message', (m) => {
-      if (m && m.serverInited) {
-        resolve(child)
+      if (!m) {
+        return
       }
+      if (m.serverInited) {
+        resolve(child)
+      } else if (m.serverInited === false) {
+        reject(new Error(
+          `session server cannot listen on ${port}: ${m.error?.message || 'unknown error'}`
+        ))
+      }
+    })
+    child.once('exit', (code) => {
+      reject(new Error(`session server exited before it was ready (code ${code})`))
     })
   })
 }
@@ -169,6 +179,37 @@ function onChildExit (child) {
   child.removeAllListeners('message')
 }
 
+/**
+ * Forward a child's interactive message to the renderer and route the answer
+ * back. Only prompts get a reply listener: `session-interactive-close` is the
+ * child taking a prompt back, nothing will ever answer it, and registering a
+ * listener for it would leak one per abandoned prompt on the long-lived ws.
+ * The child can also be gone by the time the user clicks cancel, and
+ * `child.send` throws once the IPC channel is closed.
+ */
+function forwardInteractive (child, ws) {
+  return (m) => {
+    const { type, data } = m
+    if (type !== 'common') {
+      return
+    }
+    ws.s(data)
+    if (data?.action !== 'session-interactive') {
+      return
+    }
+    ws.once((reply) => {
+      if (!child.connected) {
+        return
+      }
+      try {
+        child.send(reply)
+      } catch (err) {
+        log.warn('send interactive reply to session process failed', err.message)
+      }
+    }, data.id)
+  }
+}
+
 exports.terminal = async function (initOptions, ws, uid) {
   const type = initOptions.termType || initOptions.type || 'terminal'
   const port = await getPort()
@@ -184,15 +225,7 @@ exports.terminal = async function (initOptions, ws, uid) {
     'ftp'
   ].includes(type)
   if (isSsh) {
-    child.on('message', (m) => {
-      const { type, data } = m
-      if (type === 'common') {
-        ws.s(data)
-        ws.once((data) => {
-          child.send(data)
-        }, data.id)
-      }
-    })
+    child.on('message', forwardInteractive(child, ws))
   }
   child.on('exit', () => {
     onChildExit(child)
@@ -247,15 +280,7 @@ exports.testConnection = async function (initOptions, ws, uid) {
     'ftp'
   ].includes(type)
   if (isSsh && ws) {
-    child.on('message', (m) => {
-      const { type: msgType, data } = m
-      if (msgType === 'common') {
-        ws.s(data)
-        ws.once((respData) => {
-          child.send(respData)
-        }, data.id)
-      }
-    })
+    child.on('message', forwardInteractive(child, ws))
   }
 
   const res = await sendMsgToChildProcess(child, {

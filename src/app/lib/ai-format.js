@@ -110,10 +110,34 @@ function toOpenAIToolCall ({ id, name, arguments: args }) {
  * Request building
  * ------------------------------------------------------------------ */
 
+// DeepSeek V4 thinking mode validates the replayed history: every assistant
+// turn has to carry `reasoning_content`, and the request is rejected with
+// "The reasoning_content in the thinking mode must be passed back to the API"
+// when one does not. electerm only ever saves the final text of an answer, so
+// a rebuilt conversation has nothing to replay -- an empty string is what the
+// API accepts, and it loses nothing: the docs only require the real reasoning
+// for turns that performed tool calls, and those are not part of the saved
+// history at all.
+//
+// Gated on the model id rather than applied to every provider: an unknown
+// field on an assistant message is a 400 of its own on stricter gateways.
+const REASONING_HISTORY_MODEL = /deepseek/i
+
+function withReasoningPlaceholder (messages, model) {
+  if (!REASONING_HISTORY_MODEL.test(String(model || ''))) {
+    return messages
+  }
+  return messages.map(m => (
+    m && m.role === 'assistant' && typeof m.reasoning_content !== 'string'
+      ? { ...m, reasoning_content: '' }
+      : m
+  ))
+}
+
 function buildOpenAIChatBody ({ model, messages, tools, stream }) {
   const body = {
     model,
-    messages,
+    messages: withReasoningPlaceholder(messages, model),
     stream: !!stream
   }
   if (tools && tools.length) {
@@ -312,6 +336,53 @@ function buildRequest (format, { model, messages, tools, stream, maxTokens } = {
 }
 
 /* ------------------------------------------------------------------ *
+ * Token usage
+ * ------------------------------------------------------------------ */
+
+const positiveNumber = (v) => (
+  typeof v === 'number' && isFinite(v) && v > 0 ? v : 0
+)
+
+// Normalized token usage for the three protocols, or null when the provider
+// did not report any. Only non streaming responses carry it here -- the SSE
+// parser is not asked for `stream_options.include_usage`, so streaming
+// callers fall back to the client side estimate.
+function parseUsage (format, data) {
+  if (!data || typeof data !== 'object') {
+    return null
+  }
+  const u = data.usage
+  if (!u || typeof u !== 'object') {
+    return null
+  }
+  let promptTokens
+  let completionTokens
+  if (format === FORMAT_ANTHROPIC) {
+    // cached prompt tokens are billed and counted separately from input_tokens
+    promptTokens = positiveNumber(u.input_tokens) +
+      positiveNumber(u.cache_read_input_tokens) +
+      positiveNumber(u.cache_creation_input_tokens)
+    completionTokens = positiveNumber(u.output_tokens)
+  } else if (format === FORMAT_OPENAI_RESPONSES) {
+    promptTokens = positiveNumber(u.input_tokens)
+    completionTokens = positiveNumber(u.output_tokens)
+  } else {
+    promptTokens = positiveNumber(u.prompt_tokens)
+    completionTokens = positiveNumber(u.completion_tokens)
+  }
+  const totalTokens = positiveNumber(u.total_tokens) ||
+    (promptTokens + completionTokens)
+  if (!totalTokens) {
+    return null
+  }
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens
+  }
+}
+
+/* ------------------------------------------------------------------ *
  * Non streaming response parsing
  * ------------------------------------------------------------------ */
 
@@ -431,8 +502,12 @@ function createStreamParser (format) {
     error: null
   }
   const toolCalls = new Map()
+  // tool_call id -> slot, so a delta that omits `index` can still be routed
+  // back to the call it belongs to instead of opening a new one.
+  const slotById = new Map()
   let buffer = ''
   let eventName = ''
+  let lastChatIndex = -1
 
   const getToolCall = (key, id) => {
     let call = toolCalls.get(key)
@@ -457,6 +532,29 @@ function createStreamParser (format) {
     state.completed = true
   }
 
+  // Streamed tool calls are normally keyed by `index`, but some
+  // OpenAI-compatible servers (Gemini's and Mistral's endpoints among them)
+  // send none. Fall back to identity: a delta whose id is already known
+  // continues that call, a new id opens the next one, and a delta with
+  // neither continues the last call. Two calls that carry neither an index
+  // nor an id cannot be told apart and end up merged.
+  const resolveChatIndex = (tc) => {
+    if (tc.index !== undefined && tc.index !== null) {
+      lastChatIndex = tc.index
+    } else if (!tc.id || !slotById.has(tc.id)) {
+      const last = toolCalls.get(`c:${lastChatIndex}`)
+      if (lastChatIndex < 0 || (tc.id && last && last.id && tc.id !== last.id)) {
+        lastChatIndex += 1
+      }
+    } else {
+      lastChatIndex = slotById.get(tc.id)
+    }
+    if (tc.id) {
+      slotById.set(tc.id, lastChatIndex)
+    }
+    return lastChatIndex
+  }
+
   const handleChatChunk = (data) => {
     const choice = data.choices && data.choices[0]
     if (!choice) {
@@ -468,8 +566,7 @@ function createStreamParser (format) {
     }
     if (Array.isArray(delta.tool_calls)) {
       for (const tc of delta.tool_calls) {
-        const index = tc.index === undefined ? 0 : tc.index
-        const call = getToolCall(`c:${index}`, tc.id)
+        const call = getToolCall(`c:${resolveChatIndex(tc)}`, tc.id)
         if (tc.function) {
           if (tc.function.name) {
             call.function.name += tc.function.name
@@ -699,6 +796,7 @@ exports.detectFormat = detectFormat
 exports.headersForFormat = headersForFormat
 exports.buildRequest = buildRequest
 exports.parseResponse = parseResponse
+exports.parseUsage = parseUsage
 exports.createStreamParser = createStreamParser
 exports.streamResultToMessage = streamResultToMessage
 exports.textFromContent = textFromContent

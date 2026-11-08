@@ -2,6 +2,7 @@
  * constants
  */
 import { isMacJs } from './platform.js'
+import { defaultThemeId, defaultThemeLightId } from './theme-defaults.js'
 import logoPath1Ref from '@electerm/electerm-resource/res/imgs/electerm-round-128x128.png'
 import logoPath2Ref from '@electerm/electerm-resource/res/imgs/electerm.png'
 import logoPath3Ref from '@electerm/electerm-resource/res/imgs/electerm-watermark.png'
@@ -156,9 +157,14 @@ export const leftSideBarOpenKey = 'left-side-bar-open'
 export const pinnedQuickCommandBarKey = 'pinned-quick-command-bar'
 export const leftSidePanelWidthKey = 'left-sidebar-width'
 export const rightSidebarWidthKey = 'right-sidebar-width'
+export const rightPanelPinnedKey = 'right-panel-pinned'
+export const cmdHistoryInRightPanelKey = 'cmd-history-in-right-panel'
+export const quickCommandsInRightPanelKey = 'quick-commands-in-right-panel'
 export const addPanelWidthLsKey = 'addPanelWidth'
 export const sftpDefaultSortSettingKey = 'sftp-default-sort'
 export const qmSortByFrequencyKey = 'qm-sort-by-frequency'
+export const qmGroupByLabelKey = 'qm-group-by-label'
+export const qmCollapsedLabelsKey = 'qm-collapsed-labels'
 
 export const commonBaudRates = [
   110,
@@ -203,6 +209,29 @@ export const commonLineEndings = commonTxLineEndings
 
 export const maxBatchInput = 30
 export const windowControlWidth = 94
+// Fallback room for Windows' native min/max/close drawn over the tab bar.
+// The real width is measured at runtime (getWindowControlsOverlayWidth) or, in
+// CSS, read from env(titlebar-area-*); this is only for when neither is
+// available. Keep the number in step with the env() fallback in
+// components/tabs/tabs.styl and css/mobile.styl.
+export const windowControlsOverlayWidthFallback = 140
+
+// Width the native caption buttons take from the right edge of the tab bar.
+// navigator.windowControlsOverlay reports the real titlebar rect, so the
+// layout does not have to hardcode it (Chromium's caption buttons are 46 DIP
+// each, but the OS can lay them out differently).
+export const getWindowControlsOverlayWidth = () => {
+  const overlay = window.navigator && window.navigator.windowControlsOverlay
+  if (overlay && typeof overlay.getTitlebarAreaRect === 'function') {
+    const rect = overlay.getTitlebarAreaRect()
+    const width = window.innerWidth - rect.x - rect.width
+    // 0 when the overlay is hidden (empty rect) — fall back then
+    if (width > 0 && width < window.innerWidth) {
+      return width
+    }
+  }
+  return windowControlsOverlayWidthFallback
+}
 export const mobileBreakpoint = 600
 // breakpoint matching the setting panel's `@media (max-width: 800px)` CSS —
 // must be kept in sync with setting-wrap.styl
@@ -241,6 +270,18 @@ export const settingShortcutsId = 'setting-shortcuts'
 export const settingAiId = 'setting-ai'
 export const settingCommonId = 'setting-common'
 export const settingPasswordsId = 'setting-passwords'
+// Built in items the user is not allowed to delete: the two settings tabs,
+// the default bookmark group and the two built in terminal themes.
+// Keep this an explicit id list. A prefix test like `id.startsWith('default')`
+// would also cover user facing seeds (default quick commands, default local
+// terminal bookmarks) that the user must be able to remove.
+export const undeletableIds = new Set([
+  settingSyncId,
+  settingCommonId,
+  defaultBookmarkGroupId,
+  defaultThemeId,
+  defaultThemeLightId
+])
 // settings that only apply to the desktop (electron) app,
 // hidden when window.et.isWebApp is true
 export const webAppHiddenSettings = [
@@ -285,7 +326,21 @@ export const proxyHelpLink = 'https://github.com/electerm/electerm/wiki/proxy-fo
 export const regexHelpLink = 'https://github.com/electerm/electerm/wiki/Terminal-keywords-highlight-regular-expression-exmaples'
 export const connectionHoppingWikiLink = 'https://github.com/electerm/electerm/wiki/Connection-Hopping-Behavior-Change-in-electerm-since-v1.50.65'
 export const aiConfigWikiLink = 'https://github.com/electerm/electerm/wiki/AI-model-config-guide'
+export const installCommandHelpLink = 'https://github.com/electerm/electerm/wiki/Install-electerm-command'
+export const sshKeyContentOrPathHelpLink = 'https://github.com/electerm/electerm/wiki/SSH-Key-Content-vs-Key-Path'
+
+// Toggle options that have a wiki page explaining what they actually change.
+// renderToggle() looks the config key up here and renders a HelpIcon only for
+// the keys listed, so a toggle without an explanation stays clean. Add a page
+// under https://github.com/electerm/electerm/wiki first, then add its key here.
+export const toggleWikiMap = {
+  mouseEventsRequireAlt:
+    'https://github.com/electerm/electerm/wiki/Mouse-events-require-alt',
+  sftpPathFollowSsh:
+    'https://github.com/electerm/electerm/wiki/Warning-about-sftp-follow-ssh-path-function'
+}
 export const aiChatModeLsKey = 'ai-chat-mode'
+export const aiAutoCompressLsKey = 'ai-auto-compress'
 export const lastAiChatSessionIdKey = 'last-ai-chat-session-id'
 export const aiTermOfUseConfirmedLsKey = 'ai-term-of-use-confirmed'
 export const syncTermOfUseConfirmedLsKey = 'sync-term-of-use-confirmed'

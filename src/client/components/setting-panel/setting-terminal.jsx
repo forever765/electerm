@@ -18,7 +18,8 @@ import {
   noTerminalBgValue,
   rendererTypes,
   regexHelpLink,
-  terminalTypes
+  terminalTypes,
+  toggleWikiMap
 } from '../../common/constants'
 import defaultSettings from '../../common/default-setting'
 import ShowItem from '../common/show-item'
@@ -36,6 +37,10 @@ import createDefaultSessionLogPath from '../../common/default-log-path'
 import TerminalBackgroundConfig from './terminal-bg-config'
 import NumberConfig from './number-config'
 import Upload from '../common/upload'
+import {
+  getRightClickBehavior,
+  rightClickBehaviorList
+} from '../../common/right-click-behavior'
 import './setting.styl'
 
 const { Option } = Select
@@ -85,6 +90,7 @@ export default class SettingTerminal extends Component {
   handleChangeDelMode = v => this.onChangeValue(v, 'backspaceMode')
   handleChangeRenderType = v => this.onChangeValue(v, 'rendererType')
   handleChangeDragDropBehavior = v => this.onChangeValue(v, 'dragDropBehavior')
+  handleChangeRightClickBehavior = v => this.onChangeValue(v, 'rightClickBehavior')
 
   handleChangeFont = (values) => {
     this.onChangeValue(
@@ -121,6 +127,8 @@ export default class SettingTerminal extends Component {
   renderToggle = (name, cls = 'pd2b', label) => {
     const checked = !!this.props.config[name]
     const txt = label || e(name)
+    // only toggles listed in toggleWikiMap get a help icon
+    const wiki = toggleWikiMap[name]
     return (
       <div className={cls} key={'rt' + name}>
         <SwitchLabel
@@ -128,6 +136,11 @@ export default class SettingTerminal extends Component {
           label={txt}
           onChange={v => this.onChangeValue(v, name)}
         />
+        {
+          wiki
+            ? <HelpIcon link={wiki} />
+            : null
+        }
       </div>
     )
   }
@@ -454,6 +467,7 @@ export default class SettingTerminal extends Component {
       dragDropBehavior = 'ask',
       keywords = [{ color: 'red' }]
     } = this.props.config
+    const rightClickBehavior = getRightClickBehavior(this.props.config)
     const {
       getThemeConfig
     } = this.props.store
@@ -569,7 +583,7 @@ export default class SettingTerminal extends Component {
           [
             'cursorBlink',
             'rightClickSelectsWord',
-            'pasteWhenContextMenu',
+            'mouseEventsRequireAlt',
             'copyWhenSelect',
             'disableConfirmForLargeClipboardContent',
             'ctrlOrMetaOpenTerminalLink',
@@ -584,6 +598,16 @@ export default class SettingTerminal extends Component {
           // label differs from the config key
           this.renderToggle('remoteMonitorBarEnabled', 'pd2b', e('monitorBar'))
         }
+        <div className='pd1b'>{e('rightClickBehavior')}</div>
+        <Select
+          onChange={this.handleChangeRightClickBehavior}
+          value={rightClickBehavior}
+          popupMatchSelectWidth={false}
+        >
+          {rightClickBehaviorList.map(id => (
+            <Option key={id} value={id}>{e(id)}</Option>
+          ))}
+        </Select>
         <div className='pd1b'>{e('dragDropBehavior')}</div>
         <Select
           onChange={this.handleChangeDragDropBehavior}

@@ -26,6 +26,7 @@ import {
 } from '../../common/constants'
 import { refs } from '../common/ref'
 import sanitizeFilename from '../../common/sanitize-filename.js'
+import { getRightClickBehavior } from '../../common/right-click-behavior.js'
 import SessionControl from './session-control'
 import LazyBoundary from '../common/lazy-boundary'
 import './session.styl'
@@ -48,7 +49,6 @@ export default class SessionWrapper extends Component {
       splitSize: [50, 50],
       sessionOptions: null,
       broadcastInput: false,
-      keepaliveEnabled: false,
       wrapDisabled: false
     }
     if (props.tab.sshSftpSplitView === undefined) {
@@ -468,8 +468,11 @@ export default class SessionWrapper extends Component {
     if (!term) {
       return
     }
+    // The flag lives on the tab (not in this component's state) so the
+    // toolbar icon and the MCP set_electerm_terminal_keepalive tool share
+    // one source of truth — an MCP-driven change must light the icon up.
     const enabled = term.toggleKeepalive()
-    this.setState({ keepaliveEnabled: enabled })
+    this.editTab({ keepaliveEnabled: enabled })
   }
 
   handleExitGracefully = () => {
@@ -478,6 +481,17 @@ export default class SessionWrapper extends Component {
 
   handleOpenSearch = () => {
     refs.get('term-' + this.props.tab.id)?.toggleSearch()
+  }
+
+  // touch-only: the toolbar menu icon opens the same context menu a right
+  // click (or a long press) does, anchored just below the icon itself
+  handleOpenContextMenu = (evt) => {
+    const term = refs.get('term-' + this.props.tab.id)
+    if (!term) {
+      return
+    }
+    const rect = evt.currentTarget.getBoundingClientRect()
+    term.openContextMenuAtPoint(rect.left, rect.bottom)
   }
 
   handleZoomFontSize = (v) => {
@@ -622,9 +636,10 @@ export default class SessionWrapper extends Component {
           isNotTerminalType={this.isNotTerminalType()}
           canSplitView={this.canSplitView()}
           sftpPathFollowSsh={this.state.sftpPathFollowSsh}
-          keepaliveEnabled={this.state.keepaliveEnabled}
+          keepaliveEnabled={!!this.props.tab.keepaliveEnabled}
           broadcastInput={this.state.broadcastInput}
           wrapDisabled={this.state.wrapDisabled}
+          rightClickBehavior={getRightClickBehavior(this.props.config)}
           onChangePane={(pane) => this.onChangePane(pane)}
           toggleCheckSftpPathFollowSsh={this.toggleCheckSftpPathFollowSsh}
           onSshSftpSplitView={this.handleSshSftpSplitView}
@@ -634,6 +649,7 @@ export default class SessionWrapper extends Component {
           onFullscreen={this.handleFullscreen}
           onZoomFontSize={this.handleZoomFontSize}
           onOpenSearch={this.handleOpenSearch}
+          onOpenContextMenu={this.handleOpenContextMenu}
           onExitGracefully={this.handleExitGracefully}
         />
         <Suspense fallback={null}>

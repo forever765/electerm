@@ -26,9 +26,7 @@ const {
   setTerminalLogPath,
   startTerminalLogFile
 } = require('./session-api')
-const {
-  isWin
-} = require('../common/runtime-constants')
+const { normalizeExitStatus } = require('../common/exit-status')
 const wsDec = require('./ws-dec')
 const { zmodemManager } = require('./zmodem')
 const { trzszManager } = require('./trzsz')
@@ -361,11 +359,38 @@ if (type === 'rdp') {
     }
 
     let onCloseCalled = false
+    // How the pty / ssh channel ended. `null` until the backend reports it, and
+    // it stays null when the connection dies without an exit status, which is
+    // the renderer's cue that this was not a clean exit (#4629).
+    let exitStatus = null
+    function onTermExit (code, signal) {
+      exitStatus = normalizeExitStatus(code, signal)
+    }
+    if (typeof term.on === 'function') {
+      try {
+        term.on('exit', onTermExit)
+      } catch (_) {}
+    }
+
     function onClose () {
       if (onCloseCalled) return
       onCloseCalled = true
+      // Report the exit status while the socket can still carry it. The
+      // tab decides between "the user ended this session" and "the
+      // connection dropped" from this, not from the keystrokes it saw.
+      if (typeof ws.s === 'function' && ws.readyState === 1) {
+        try {
+          ws.s(Object.assign({ action: 'session-exit' },
+            exitStatus || normalizeExitStatus(null, null)))
+        } catch (_) {}
+      }
       // Detach this connection's listeners so a reconnect does not stack
       // duplicates on the reused term instance.
+      if (typeof term.off === 'function') {
+        try {
+          term.off('exit', onTermExit)
+        } catch (_) {}
+      }
       if (term._wsDataHandler && typeof term.off === 'function') {
         try {
           term.off('data', term._wsDataHandler)
@@ -409,9 +434,15 @@ if (type === 'rdp') {
     }
 
     term._wsCloseHandler = onClose
-    term.on('close', onClose)
-    if (term.isLocal && isWin) {
+    // node-pty on unix emits 'close' *before* 'exit', so a local session that
+    // also listened to 'close' would report "no exit status" for a clean
+    // `exit` and fall back to guessing. The pty's own 'exit' is the
+    // authoritative end for a local session - node-pty guarantees it, with a
+    // destroy timeout, even when the socket never closes.
+    if (term.isLocal) {
       term.on('exit', onClose)
+    } else {
+      term.on('close', onClose)
     }
 
     ws.on('message', function (msg) {
@@ -438,7 +469,15 @@ if (type === 'rdp') {
               // so \x00 (NUL) sits in the buffer and never wakes bash up.
               // A newline wakes bash's read(), resets the TMOUT alarm, and bash
               // simply re-displays the prompt.  The client suppresses that echo.
-              term.write('\n\r\x1b[K')
+              // This is a protocol-level byte sequence, not typed input, so it
+              // bypasses any tx line-ending rewriting - the same reason XMODEM
+              // data goes through writeRaw.
+              const wake = '\n\r\x1b[K'
+              if (typeof term.writeRaw === 'function') {
+                term.writeRaw(wake)
+              } else {
+                term.write(wake)
+              }
               return
             }
           } catch (e) {
@@ -592,6 +631,9 @@ process.on('message', async (message) => {
           }
         }
         process.on('message', func)
+        // a prompt can be taken back before it is answered; without this the
+        // listener (and the session object it closes over) would stay forever
+        return () => process.removeListener('message', func)
       }
     }
 
@@ -639,16 +681,38 @@ process.on('message', async (message) => {
 })
 
 const runServer = function () {
-  return new Promise((resolve) => {
-    app.listen(wsPort, electermHost, () => {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(wsPort, electermHost, () => {
       log.info('session server', 'runs on', electermHost, wsPort)
       resolve()
     })
+    // a listen failure used to become an uncaughtException, leaving the parent
+    // process waiting on serverInited forever (the terminal tab just hung).
+    // express-ws also re-emits the http server's errors on its WebSocketServer,
+    // and an unhandled 'error' there throws before the 'error' listener on the
+    // http server runs -- so both need one.
+    server.on('error', reject)
+    const wss = app.getWss && app.getWss()
+    if (wss) {
+      wss.on('error', reject)
+    }
   })
 }
 
 async function main () {
-  await runServer()
+  try {
+    await runServer()
+  } catch (err) {
+    log.error('session server', 'failed to listen on', `${electermHost}:${wsPort}`, err.message)
+    try {
+      process.send({
+        serverInited: false,
+        error: { message: err.message, code: err.code }
+      })
+    } catch (e) {}
+    setTimeout(() => process.exit(1), 100)
+    return
+  }
   process.send({ serverInited: true })
 }
 

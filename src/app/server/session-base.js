@@ -6,11 +6,16 @@ const { createLogFileName } = require('../common/create-session-log-file-path')
 const SessionLog = require('./session-log')
 const time = require('../common/time.js')
 const globalState = require('./global-state')
+const { install: installStructuredClone } = require('./structured-clone-shim')
 
 // const { MockBinding } = require('@serialport/binding-mock')
 // MockBinding.createPort('/dev/ROBOT', { echo: true, record: true })
 
 function createVtParser (cols = 4096) {
+  // @xterm/headless calls structuredClone when a Terminal is built, and the
+  // Electron 22 legacy builds (Node 16) have no such global: without this a
+  // session with "Save terminal log to file" on dies here (#4650).
+  installStructuredClone()
   const { Terminal } = require('@xterm/headless')
   const term = new Terminal({ cols, rows: 50, allowProposedApi: true })
   return term
@@ -26,7 +31,11 @@ class TerminalBase {
         logDir: initOptions.sessionLogPath,
         fileName: createLogFileName(initOptions.logName)
       })
-      this._initVtParser()
+      // an unusable log path must not cost the session, and parsing the output
+      // for timestamps nobody can write is pure waste (#4688)
+      if (this.sessionLogger.ready) {
+        this._initVtParser()
+      }
     }
     if (ws) {
       this.ws = ws
@@ -47,6 +56,7 @@ class TerminalBase {
   _initVtParser () {
     this._vtTerm = createVtParser(this.initOptions.cols || 4096)
     this._vtLastRow = 0
+    this._logEndedWithCR = false
     this._vtTerm.onLineFeed(() => {
       if (!this.sessionLogger) return
       const buffer = this._vtTerm.buffer.active
@@ -54,7 +64,19 @@ class TerminalBase {
       if (row < 0) return
       const line = buffer.getLine(row)
       if (!line) return
-      const text = line.translateToString(true)
+      // A line wider than the terminal wraps over several rows, and every
+      // row after the first has isWrapped set. Log the whole line, not only
+      // its last row (#4496). translateToString(true) trims only empty cells,
+      // so a space at the wrap point is kept, while the empty cell a wide
+      // character leaves at the end of a row is not.
+      let first = row
+      while (first > 0 && buffer.getLine(first).isWrapped) {
+        first--
+      }
+      let text = ''
+      for (let i = first; i <= row; i++) {
+        text += buffer.getLine(i).translateToString(true)
+      }
       const dt = this.initOptions.addTimeStampToTermLog
         ? `[${time()}] `
         : ''
@@ -79,7 +101,9 @@ class TerminalBase {
         logDir: this.initOptions.sessionLogPath,
         fileName: createLogFileName(this.initOptions.logName)
       })
-      this._initVtParser()
+      if (this.sessionLogger.ready) {
+        this._initVtParser()
+      }
     }
   }
 
@@ -99,7 +123,9 @@ class TerminalBase {
         logDir: this.initOptions.sessionLogPath,
         fileName: createLogFileName(this.initOptions.logName)
       })
-      this._initVtParser()
+      if (this.sessionLogger.ready) {
+        this._initVtParser()
+      }
     }
   }
 
@@ -127,16 +153,30 @@ class TerminalBase {
     if (!this.sessionLogger || !this._vtTerm) {
       return
     }
-    // Normalize bare \r (carriage return, not part of \r\n) to \r\n.
-    // Embedded devices (UART/telnet) often use \r-only line endings which
-    // don't trigger xterm's onLineFeed, causing timestamps to be missing
-    // for every line except the first.
-    if (Buffer.isBuffer(data)) {
-      const str = data.toString('binary')
-      const normalized = str.replace(/\r(?!\n)/g, '\r\n')
-      this._vtTerm.write(normalized)
+    const isBuffer = Buffer.isBuffer(data)
+    let str = isBuffer ? data.toString('binary') : String(data)
+    // The previous chunk ended with \r, which was logged as a line end. The
+    // rest of that line ending (more \r, then \n) arrives here and must not
+    // end a second, empty line.
+    if (this._logEndedWithCR) {
+      const [lineEnd, lf] = /^\r*(\n?)/.exec(str)
+      str = str.slice(lineEnd.length)
+      if (!str && !lf) {
+        return
+      }
+    }
+    this._logEndedWithCR = str.endsWith('\r')
+    // A run of \r, with or without the \n after it, ends one line. Embedded
+    // devices (UART/telnet) often use \r-only line endings which don't
+    // trigger xterm's onLineFeed, causing timestamps to be missing for every
+    // line except the first; a program writing \r\n to a tty with onlcr
+    // produces \r\r\n.
+    const normalized = str.replace(/\r+\n?/g, '\r\n')
+    if (isBuffer) {
+      // Write bytes, not the 'binary' string: xterm reads a string as UTF-16,
+      // so each byte of a multi-byte UTF-8 character would become a character
+      this._vtTerm.write(Buffer.from(normalized, 'binary'))
     } else {
-      const normalized = String(data).replace(/\r(?!\n)/g, '\r\n')
       this._vtTerm.write(normalized)
     }
   }

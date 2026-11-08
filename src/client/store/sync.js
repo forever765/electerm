@@ -8,10 +8,14 @@ import { action } from 'manate'
 import {
   settingMap, packInfo, syncTypes, syncDataMaps
 } from '../common/constants'
+import {
+  checkSyncPayloadSize, tooLargeMessage, nearLimitMessage
+} from '../common/sync-payload-limit'
 import { update, getData } from '../common/db'
 import fetch from '../common/fetch-from-server'
 import download from '../common/download'
 import { fixBookmarks } from '../common/db-fix'
+import { collectUncategorizedBookmarks } from '../common/bookmark-uncategorized'
 import dayjs from 'dayjs'
 import parseJsonSafe from '../common/parse-json-safe'
 import { runImportTask } from '../common/import-task'
@@ -22,27 +26,32 @@ const {
   version: packVer
 } = packInfo
 
-// Server-managed config keys that must never be overwritten by an
-// imported/synced config, because they are specific to the running
-// server instance.  Overwriting tokenElecterm in particular breaks
-// every subsequent WebSocket connection (terminals, sftp, transfers)
-// because the token no longer matches the server's JWT secret, causing
-// connections to silently fail verification — the terminal appears to
-// connect but input never works until the app is restarted.
-const serverManagedConfigKeys = [
+// Server- and machine-local config keys that must never be overwritten by an
+// imported/synced config, because they describe *this* install. Overwriting
+// tokenElecterm in particular breaks every subsequent WebSocket connection
+// (terminals, sftp, transfers) because the token no longer matches the
+// server's JWT secret, causing connections to silently fail verification — the
+// terminal appears to connect but input never works until the app is
+// restarted. `sessionLogPath` is the same shape of mistake in the filesystem:
+// a full-data import carries `C:\Users\<someone else>\Documents\electerm` over
+// from the machine that exported it, and an unwritable log dir used to take
+// the session down with it (#4688). Keep the path local to the install, the
+// per-OS default (`default-log-path.js`) covers a machine that has none.
+const localConfigKeys = [
   'tokenElecterm',
   'host',
   'port',
   'server',
   'wsHost',
   'wsPort',
-  'useSystemTitleBar'
+  'useSystemTitleBar',
+  'sessionLogPath'
 ]
 
-function stripServerManagedKeys (conf) {
+function stripLocalConfigKeys (conf) {
   if (!conf || typeof conf !== 'object') return conf
   const safe = { ...conf }
-  for (const k of serverManagedConfigKeys) {
+  for (const k of localConfigKeys) {
     delete safe[k]
   }
   return safe
@@ -50,6 +59,33 @@ function stripServerManagedKeys (conf) {
 
 function isJSON (str = '') {
   return str.startsWith('[')
+}
+
+/**
+ * Refuse an upload the electerm-cloud API is certain to reject, and warn about
+ * one it may reject.
+ *
+ * The server's cap is applied to the raw payload *before* it is compressed, so
+ * it is a hard ceiling on how much data can be synced at all — a payload over
+ * it comes back as a 413 that surfaces here as a bare HTTPError. Checking
+ * locally turns that into a message naming the actual size and the limit.
+ *
+ * Only the electerm-cloud API has this cap; github/gitee gists and WebDAV have
+ * their own, unrelated ones.
+ */
+function checkCloudPayloadSize (type, gistData) {
+  if (type !== syncTypes.cloud && type !== syncTypes.custom) {
+    return
+  }
+  const { kb, level } = checkSyncPayloadSize(gistData)
+  if (level === 'over') {
+    throw new Error(tooLargeMessage(kb))
+  }
+  if (level === 'warn') {
+    // Still under the cap, so the upload proceeds — but it is close enough
+    // that the user should hear about it before it starts failing.
+    window.store.onError(new Error(nearLimitMessage(kb)))
+  }
 }
 
 /**
@@ -375,12 +411,23 @@ export default (Store) => {
       }
 
       let serverItems = []
+      let encrypted = false
+      let serverPreview = ''
       if (serverStr) {
         try {
           serverStr = await decryptSyncData(serverStr, pass, n)
           serverItems = JSON.parse(serverStr)
         } catch (e) {
           console.error(`Failed to parse server data for ${n}:`, e)
+          // The server holds ciphertext we cannot read: no sync password
+          // configured here, or a different one. Reporting it as "0 items"
+          // reads as "the server is empty" and invites an upload that would
+          // overwrite the encrypted data — surface the ciphertext instead.
+          // (Plaintext JSON rejected by the fail-closed gate stays at 0.)
+          if (!isJSON(serverStr)) {
+            encrypted = true
+            serverPreview = serverStr.slice(0, 80)
+          }
         }
       }
       serverData[n] = serverItems
@@ -401,7 +448,9 @@ export default (Store) => {
         onlyServer: onlyServer.length,
         common: common.length,
         localItems: onlyLocal,
-        serverItems: onlyServer
+        serverItems: onlyServer,
+        encrypted,
+        serverPreview
       })
     }
 
@@ -497,6 +546,7 @@ export default (Store) => {
         }
       }
     }
+    checkCloudPayloadSize(type, gistData)
     const res = await fetchData(
       type,
       'update',
@@ -581,7 +631,7 @@ export default (Store) => {
             get(gist, 'files["userConfig.json"].content')
           )
           if (userConfig) {
-            store.setConfig(stripServerManagedKeys(userConfig))
+            store.setConfig(stripLocalConfigKeys(userConfig))
           }
           if (userConfig && userConfig.theme) {
             store.setTheme(userConfig.theme)
@@ -646,7 +696,7 @@ export default (Store) => {
         get(gist, 'files["userConfig.json"].content')
       )
       if (userConfig) {
-        store.setConfig(stripServerManagedKeys(userConfig))
+        store.setConfig(stripLocalConfigKeys(userConfig))
       }
       if (userConfig && userConfig.theme) {
         store.setTheme(userConfig.theme)
@@ -742,31 +792,71 @@ export default (Store) => {
       }
       fixed[n] = arr
     }
-    // clear all targets first - importAll replaces data sets, not appends.
-    // watchers are stopped inside runImportTask, so this is silent until restart
-    action(() => {
-      for (const n of names) {
-        store.setItems(n, [])
-      }
-    })()
+    // Import replaces data sets, so the store has to end up holding exactly
+    // `fixed`. Keep a copy of what it holds now: if the import is cancelled or
+    // throws, this goes back, so the store and the watcher snapshots agree
+    // again and the watcher restart cannot be mistaken for a mass deletion.
+    const backup = new Map(
+      names.map(n => [n, copy(store.getItems(n))])
+    )
     await runImportTask({
       title: e('import'),
       batch: 200,
       stopWatchers: names,
-      // one chunked step per data set (bookmarks, groups, themes, ...),
-      // so the progress bar advances per batch instead of per data set
-      steps: names.map((n) => {
-        const arr = fixed[n]
-        return {
-          label: n,
-          items: arr,
-          process: (chunk) => {
-            store[n].push(...chunk)
+      // Clearing happens *inside* the task, i.e. while the watchers are
+      // stopped, rather than before it. Doing it earlier meant the empty store
+      // was already in place while the snapshots still described the full
+      // table, so any path that restarted a watcher without the import having
+      // finished (cancel, throw) deleted every record on disk.
+      steps: [
+        {
+          label: e('import'),
+          weight: 1,
+          run: () => {
+            action(() => {
+              for (const n of names) {
+                store.setItems(n, [])
+              }
+            })()
+          }
+        },
+        // one chunked step per data set (bookmarks, groups, themes, ...),
+        // so the progress bar advances per batch instead of per data set
+        ...names.map((n) => {
+          const arr = fixed[n]
+          return {
+            label: n,
+            items: arr,
+            process: (chunk) => {
+              store[n].push(...chunk)
+            }
+          }
+        }),
+        // the same sweep the bookmarks-only import does: a bookmark the file
+        // left without a category reference is invisible in the sidebar tree,
+        // which is built from those references
+        {
+          label: e('bookmarkCategory'),
+          weight: 1,
+          run: () => {
+            action(() => {
+              collectUncategorizedBookmarks(store.bookmarks, store.bookmarkGroups)
+            })()
           }
         }
-      })
+      ],
+      // The import did not complete: put the store back the way it was so the
+      // watcher restart below is a no-op instead of deleting the untouched
+      // records. (import-task.js also reseeds each watcher before restarting.)
+      onAbort: () => {
+        action(() => {
+          for (const [n, arr] of backup) {
+            store.setItems(n, copy(arr))
+          }
+        })()
+      }
     })
-    store.updateConfig(stripServerManagedKeys(objs.config))
+    store.updateConfig(stripLocalConfigKeys(objs.config))
     if (objs.config?.theme) {
       store.setTheme(objs.config.theme)
     }
@@ -819,7 +909,8 @@ export default (Store) => {
     const configSyncKeys = [
       'keepaliveInterval',
       'rightClickSelectsWord',
-      'pasteWhenContextMenu',
+      'mouseEventsRequireAlt',
+      'rightClickBehavior',
       'ctrlOrMetaOpenTerminalLink',
       'hotkey',
       'sshReadyTimeout',

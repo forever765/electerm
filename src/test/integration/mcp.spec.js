@@ -4,7 +4,14 @@
  * Prerequisites:
  *   - electerm dev app running (npm start + npm run app)
  *   - MCP Server widget started on http://127.0.0.1:30837/mcp, default config
- *     (no apiKey; bookmarks/groups/sftp enabled; tasks extension enabled)
+ *     (bookmarks/groups/sftp read enabled, tasks extension enabled). The
+ *     transfer tests additionally need `enableSftpWrite` on — it is opt-in
+ *     since GHSA-vw4q-c6px-w5p3; without it the write tools are not registered
+ *     and those cases degrade to no-ops via tolerant().
+ *   - ELECTERM_MCP_API_KEY set to the key the widget generated. It is in the
+ *     URL the widget copies on start (…/mcp?apiKey=…), or in the instance
+ *     detail panel. The server requires it — it no longer runs unauthenticated
+ *     (GHSA-45rj-2wq9-r9mr).
  *
  * SSH-dependent tests use an in-process test SSH server (@electerm/ssh2),
  * see src/test/integration/lib/ssh-test-server.js — no external SSH host needed.
@@ -30,7 +37,10 @@ const {
   TEST_PORT
 } = require('./lib/ssh-test-server')
 
-const serverUrl = 'http://127.0.0.1:30837/mcp'
+const MCP_API_KEY = process.env.ELECTERM_MCP_API_KEY || ''
+const serverUrl = MCP_API_KEY
+  ? `http://127.0.0.1:30837/mcp?apiKey=${encodeURIComponent(MCP_API_KEY)}`
+  : 'http://127.0.0.1:30837/mcp'
 const uid = Date.now()
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -256,6 +266,10 @@ function skipOffline (t) {
     t.skip('MCP server not reachable at 127.0.0.1:30837 — start the electerm app with the MCP widget')
     return true
   }
+  if (!MCP_API_KEY) {
+    t.skip('ELECTERM_MCP_API_KEY not set — copy it from the URL the widget shows')
+    return true
+  }
   return false
 }
 
@@ -435,6 +449,7 @@ describe('MCP server integration (live app + in-process SSH server)', () => {
       'wait_for_electerm_terminal_idle',
       'get_electerm_terminal_status',
       'cancel_electerm_terminal_command',
+      'set_electerm_terminal_keepalive',
       'execute_electerm_command',
       'open_electerm_tab_ssh',
       'open_electerm_tab_telnet',
@@ -450,16 +465,27 @@ describe('MCP server integration (live app + in-process SSH server)', () => {
       'electerm_sftp_list',
       'electerm_sftp_stat',
       'electerm_sftp_read_file',
-      'electerm_sftp_del_file_or_folder',
-      'electerm_sftp_upload',
-      'electerm_sftp_download',
-      'electerm_zmodem_upload',
-      'electerm_zmodem_download',
       'electerm_sftp_transfer_list',
       'electerm_sftp_transfer_history'
     ]) {
       assert.ok(names.includes(expected), `Missing tool: ${expected}`)
     }
+
+    // Write tools are opt-in (enableSftpWrite, off by default since
+    // GHSA-vw4q-c6px-w5p3): either the widget registered all of them or none.
+    const writeTools = [
+      'electerm_sftp_del_file_or_folder',
+      'electerm_sftp_upload',
+      'electerm_sftp_download',
+      'electerm_zmodem_upload',
+      'electerm_zmodem_download'
+    ]
+    const registeredWriteTools = writeTools.filter(name => names.includes(name))
+    assert.ok(
+      registeredWriteTools.length === 0 ||
+        registeredWriteTools.length === writeTools.length,
+      `SFTP write tools must be all-or-nothing, got ${registeredWriteTools.join(', ')}`
+    )
 
     for (const removed of [
       'run_electerm_background_command',
@@ -892,10 +918,88 @@ describe('MCP server integration (live app + in-process SSH server)', () => {
     }
   })
 
+  test('SSH tab: session keepalive can be toggled over MCP', { timeout: 120000 }, async (t) => {
+    if (skipOffline(t)) return
+    const { sid } = await initSession()
+
+    const opened = toolPayload(await callTool(sid, 'open_electerm_tab_ssh', {
+      title: `MCP_IT_SSH_KEEPALIVE_${uid}`,
+      host: '127.0.0.1',
+      port: TEST_PORT,
+      username: TEST_USERNAME,
+      password: TEST_PASSWORD
+    }))
+    assert.equal(opened.success, true)
+    const tabId = opened.tabId
+    openedTabIds.push(tabId)
+    await waitForTerminalReady(sid, tabId)
+
+    const findTab = async () => {
+      const tabs = toolPayload(await callTool(sid, 'list_electerm_tabs', {}))
+      return tabs.find(tb => tb.id === tabId)
+    }
+
+    try {
+      // off until something turns it on
+      let status = toolPayload(await callTool(sid, 'get_electerm_terminal_status', { tabId }))
+      assert.equal(status.keepalive, false, 'keepalive must start off')
+      assert.equal((await findTab()).keepalive, false, 'list_tabs must agree')
+
+      const on = toolPayload(await callTool(sid, 'set_electerm_terminal_keepalive', {
+        tabId,
+        enabled: true
+      }))
+      assert.equal(on.success, true)
+      assert.equal(on.keepalive, true)
+      assert.equal(on.tabId, tabId)
+
+      status = toolPayload(await callTool(sid, 'get_electerm_terminal_status', { tabId }))
+      assert.equal(status.keepalive, true, 'status must report keepalive on')
+      assert.equal((await findTab()).keepalive, true, 'list_tabs must report keepalive on')
+
+      // set (not toggle) semantics: repeating the same value is a no-op
+      const again = toolPayload(await callTool(sid, 'set_electerm_terminal_keepalive', {
+        tabId,
+        enabled: true
+      }))
+      assert.equal(again.keepalive, true, 'enabling twice must not toggle it off')
+
+      // the session survives a couple of keepalive cycles and still runs commands
+      await sleep(7000)
+      const r = toolPayload(await callTool(sid, 'execute_electerm_command', {
+        command: `echo MCP_IT_KEEPALIVE_ALIVE_${uid}`,
+        tabId
+      }))
+      assert.equal(r.exitCode, 0)
+      assert.ok(r.stdout.includes(`MCP_IT_KEEPALIVE_ALIVE_${uid}`))
+
+      const off = toolPayload(await callTool(sid, 'set_electerm_terminal_keepalive', {
+        tabId,
+        enabled: false
+      }))
+      assert.equal(off.keepalive, false)
+      status = toolPayload(await callTool(sid, 'get_electerm_terminal_status', { tabId }))
+      assert.equal(status.keepalive, false, 'status must report keepalive off')
+
+      // `enabled` is required
+      const bad = await callTool(sid, 'set_electerm_terminal_keepalive', { tabId })
+      assert.equal(bad.result.isError, true)
+      assert.match(bad.result.content[0].text, /enabled/)
+
+      // unknown tab is rejected
+      const missing = await callTool(sid, 'set_electerm_terminal_keepalive', {
+        tabId: 'tab-does-not-exist',
+        enabled: true
+      })
+      assert.equal(missing.result.isError, true)
+    } finally {
+      await callTool(sid, 'close_electerm_tab', { tabId })
+    }
+  })
+
   // ─────────────────────────────────────────────────────────────────────────
   // 4. SFTP against the in-process server (needs the app's SFTP panel)
   // ─────────────────────────────────────────────────────────────────────────
-
   test('SFTP: list, stat, read, del on the test server', { timeout: 120000 }, async (t) => {
     if (skipOffline(t)) return
     const { sid } = await initSession()

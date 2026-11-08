@@ -12,6 +12,7 @@ const {
   shell
 } = require('electron')
 const globalState = require('./glob-state')
+const log = require('../common/log')
 const ipcSyncFuncs = require('./ipc-sync')
 const { dbAction } = require('./db')
 const { listItermThemes } = require('./iterm-theme')
@@ -22,8 +23,13 @@ const {
   listWidgets,
   runWidget,
   stopWidget,
-  runWidgetFunc
+  runWidgetFunc,
+  callWidgetFunc,
+  importWidget,
+  importWidgetFromSource,
+  deleteWidget
 } = require('../widgets/load-widget')
+const widgetLog = require('../widgets/instance-log')
 const {
   checkMigrate,
   migrate
@@ -40,12 +46,15 @@ const {
 const { saveUserConfig } = require('./user-config-controller')
 const { changeHotkeyReg, initShortCut } = require('./shortcut')
 const lastStateManager = require('./last-state')
+const { checkHost } = require('./check-host')
+const { createDialogLastDir } = require('./dialog-last-dir')
 const {
   registerDeepLink,
   unregisterDeepLink,
   checkProtocolRegistration,
   getPendingDeepLink
 } = require('./deep-link')
+const { getPendingVvFile } = require('./vv-file-open')
 const {
   packInfo,
   appPath,
@@ -61,12 +70,22 @@ const {
 } = require('./window-control')
 const { openFileWithEditor } = require('./open-file-with-editor')
 const { loadFontList } = require('./font-list')
-const { checkDbUpgrade, doUpgrade } = require('../upgrade')
+// `../upgrade` pulls in the whole default-data set (db-defaults,
+// default-local-bookmarks, init-db, version-upgrade) and nothing needs it until
+// the renderer asks -- and it asks only *after* the UI has mounted. Require it
+// lazily so it stays off the pre-window startup path.
+let upgradeMod
+const upgrade = () => (upgradeMod || (upgradeMod = require('../upgrade')))
 const { listSerialPorts } = require('./serial-port')
 const initApp = require('./init-app')
 const { encryptAsync, decryptAsync } = require('./enc')
 const { safeEncrypt, safeDecrypt } = require('./safe-storage')
 const { initCommandLine } = require('./command-line')
+const {
+  getCommandStatus,
+  installCommand,
+  uninstallCommand
+} = require('./install-command')
 const { watchFile, unwatchFile } = require('./watch-file')
 const lookup = require('../common/lookup')
 const {
@@ -74,7 +93,8 @@ const {
   AIchatWithTools,
   AIlistModels,
   getStreamContent,
-  stopStream
+  stopStream,
+  abortAIRequest
 } = require('./ai')
 
 // Security: whitelist of safe environment variables for Linux/Mac/Windows
@@ -117,10 +137,22 @@ function isTrustedIpcSender (event) {
   return !!win && event.sender === win.webContents
 }
 
+// Electron 43 made file dialogs default to Downloads and stopped the OS from
+// restoring the last used directory, so we keep that memory ourselves. See
+// ./dialog-last-dir.js.
+const dialogLastDir = createDialogLastDir({
+  get: (key) => lastStateManager.get(key),
+  set: (key, value) => lastStateManager.set(key, value),
+  log: console
+})
+
 async function initAppServer () {
   const {
     config
   } = await getConfig(globalState.get('serverInited'))
+  // must happen before the server child is forked: it opens its own log level
+  // from the inherited ELECTERM_DEBUG (see ../server/child-process.js)
+  log.setDebugMode(!!config.debug)
   const {
     langs,
     langMap,
@@ -164,7 +196,10 @@ function initIpc () {
       installSrc,
       appPath,
       exePath,
-      isPortable
+      isPortable,
+      // where running widgets write their logs; the widget manager reads them
+      // straight off disk (see widgets/instance-log.js)
+      widgetLogPath: widgetLog.getLogDir()
     }
     initApp(langMap, config)
     initShortCut(globalShortcut, globalState.get('win'), config)
@@ -176,7 +211,29 @@ function initIpc () {
       console.error('[security] blocked IPC call: ' + name)
       return
     }
-    event.returnValue = ipcSyncFuncs[name](...args)
+    const result = ipcSyncFuncs[name](...args)
+    // Electron 44 made the clipboard module async: clipboard.readText() now
+    // returns a Promise. A Promise cannot be structured-cloned into a sync IPC
+    // reply, so assigning one to event.returnValue throws "An object could not
+    // be cloned." and the renderer's sendSync fails with "reply was never sent".
+    // Settling it here keeps window.pre.readClipboard() synchronous, which the
+    // client depends on -- hasFileInClipboardText() is called during render.
+    // Assigning event.returnValue asynchronously is supported: the renderer
+    // blocks until it is set.
+    if (result && typeof result.then === 'function') {
+      result.then(
+        (value) => {
+          event.returnValue = value
+        },
+        (err) => {
+          // Must always reply, or the renderer's sendSync blocks forever.
+          console.error('[ipc] sync-func ' + name + ' failed:', err)
+          event.returnValue = null
+        }
+      )
+    } else {
+      event.returnValue = result
+    }
   })
   const asyncGlobals = {
     confirmExit: () => {
@@ -189,10 +246,11 @@ function initIpc () {
     init,
     listSerialPorts,
     loadFontList,
-    doUpgrade,
-    checkDbUpgrade,
+    doUpgrade: (...args) => upgrade().doUpgrade(...args),
+    checkDbUpgrade: (...args) => upgrade().checkDbUpgrade(...args),
     checkMigrate,
     migrate,
+    checkHost,
     getExitStatus: () => globalState.get('exitStatus'),
     setExitStatus: (status) => {
       globalState.set('exitStatus', status)
@@ -238,6 +296,7 @@ function initIpc () {
     AIlistModels,
     getStreamContent,
     stopStream,
+    abortAIRequest,
     setTitle: (title) => {
       const win = globalState.get('win')
       win && win.setTitle(packInfo.name + ' - ' + title)
@@ -246,8 +305,23 @@ function initIpc () {
       const win = globalState.get('win')
       win && win.setBackgroundColor(color)
     },
+    // Windows + system title bar only (window controls overlay)
+    setTitleBarOverlay: (opts = {}) => {
+      const win = globalState.get('win')
+      if (win && process.platform === 'win32' && globalState.get('systemTitleBar')) {
+        win.setTitleBarOverlay(opts)
+      }
+    },
     changeHotkey: changeHotkeyReg(globalShortcut, globalState.get('win')),
     initCommandLine,
+    // No renderer-supplied options: the main process owns platform/execPath.
+    // `packaged` is the guard against a dev run, where execPath is Electron.
+    getElectermCommandStatus: () =>
+      getCommandStatus({ packaged: app.isPackaged }),
+    installElectermCommand: () =>
+      installCommand({ packaged: app.isPackaged }),
+    uninstallElectermCommand: () =>
+      uninstallCommand({ packaged: app.isPackaged }),
     watchFile,
     unwatchFile,
     openFileWithEditor,
@@ -255,10 +329,27 @@ function initIpc () {
     runWidget,
     stopWidget,
     runWidgetFunc,
+    // user widgets: main-process functions their own UI calls, install and
+    // uninstall of a widget folder
+    callWidgetFunc,
+    importWidget,
+    importWidgetFromSource,
+    deleteWidget,
     registerDeepLink,
     unregisterDeepLink,
     checkProtocolRegistration,
     getPendingDeepLink,
+    getPendingVvFile,
+    // macOS RDP with Control/Command swapped: the renderer sends Cmd as Ctrl,
+    // but a registered app-menu accelerator (Cmd+C/V/A/Z/X) is consumed by
+    // AppKit before the page sees the keydown, so those keys would never reach
+    // the remote. The renderer scopes this to "the swapped canvas has focus".
+    setRdpSwapCtrlCmd: (active) => {
+      const win = globalState.get('win')
+      if (win && !win.isDestroyed()) {
+        win.webContents.setIgnoreMenuShortcuts(!!active)
+      }
+    },
     getEnv: (key) => {
       if (key) {
         return SAFE_ENV_KEYS.includes(key) ? process.env[key] : ''
@@ -279,11 +370,22 @@ function initIpc () {
   })
   ipcMain.handle('show-open-dialog-sync', async (event, ...args) => {
     const win = BrowserWindow.fromWebContents(event.sender)
-    return dialog.showOpenDialogSync(win, ...args)
+    const opts = args[0] && typeof args[0] === 'object' ? args[0] : {}
+    const res = dialog.showOpenDialogSync(
+      win,
+      ...await dialogLastDir.withDefaultPath(args, 'open')
+    )
+    dialogLastDir.rememberOpenResult(opts, res)
+    return res
   })
   ipcMain.handle('show-save-dialog', async (event, ...args) => {
     const win = BrowserWindow.fromWebContents(event.sender)
-    return dialog.showSaveDialog(win, ...args)
+    const res = await dialog.showSaveDialog(
+      win,
+      ...await dialogLastDir.withDefaultPath(args, 'save')
+    )
+    dialogLastDir.rememberSaveResult(res)
+    return res
   })
 }
 

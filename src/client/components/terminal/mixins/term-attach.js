@@ -5,6 +5,7 @@ import AttachAddon from '../attach-addon-custom.js'
 import { createTriggerManager } from '../automation/index.js'
 import { isWin } from '../../../common/constants.js'
 import { isUnsafeFilename } from '../../../common/file-drop-utils.js'
+import { createCdCommand } from '../ssh-reload-state.js'
 
 /**
  * Everything that writes to the session: the socket attach addon, encoding,
@@ -22,9 +23,6 @@ export const attachMixin = {
       this.encode || this.props.tab.encode || 'utf-8'
     )
     await this.attachAddon.activate(this.term)
-    if (this.osc52Addon) {
-      this.osc52Addon.setSendData(this.attachAddon._sendData.bind(this.attachAddon))
-    }
     this.initTriggerManager()
   },
 
@@ -34,12 +32,25 @@ export const attachMixin = {
   },
 
   toggleKeepalive () {
+    return this.setKeepalive(!this._keepaliveEnabled)
+  },
+
+  // Idempotent setter shared by the toolbar heartbeat icon and the MCP
+  // `set_electerm_terminal_keepalive` tool, so both paths agree on one
+  // state instead of each owning their own copy.
+  // Returns the resulting flag; before the attach addon exists (terminal
+  // not connected yet) the request is refused and false is returned.
+  setKeepalive (enabled) {
     if (!this.attachAddon) {
       return false
     }
-    this._keepaliveEnabled = !this._keepaliveEnabled
+    this._keepaliveEnabled = !!enabled
     this.attachAddon.setKeepalive(this._keepaliveEnabled)
     return this._keepaliveEnabled
+  },
+
+  getKeepalive () {
+    return !!this._keepaliveEnabled
   },
 
   batchInput (cmd) {
@@ -57,8 +68,15 @@ export const attachMixin = {
     if (isUnsafeFilename(p)) {
       return message.error('File name contains unsafe characters')
     }
-    const isWinPath = /^[a-zA-Z]:\\/.test(p)
-    this.runQuickCommand(isWinPath ? `cd /d "${p}"` : `cd "${p}"`)
+    // Same shell resolution the session used: the bookmark/profile override
+    // first, then the global setting. `localShell` is what actually spawned.
+    const cmd = createCdCommand(p, {
+      remote: !!this.isRemote(),
+      shell: this.localShell || this.props.tab.execWindows || this.props.config.execWindows
+    })
+    if (cmd) {
+      this.runQuickCommand(cmd)
+    }
   },
 
   initTriggerManager () {

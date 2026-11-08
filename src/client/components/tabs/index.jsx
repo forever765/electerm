@@ -21,6 +21,7 @@ import {
   tabMargin,
   extraTabWidth,
   windowControlWidth,
+  getWindowControlsOverlayWidth,
   isMacJs
 } from '../../common/constants'
 import WindowControl from './window-control'
@@ -46,6 +47,11 @@ export default class Tabs extends Component {
     tabsRef.current.addEventListener('wheel', this.handleWheelEvent, {
       passive: false
     })
+    // Tab widths follow their titles, so they can change without a tab being
+    // added or removed, such as on rename. Watch them to keep the wrapper width
+    // and the overflow state in step with the tabs.
+    this.resizeObserver = new ResizeObserver(this.handleTabsResize)
+    this.observeTabs()
   }
 
   componentDidUpdate (prevProps) {
@@ -56,9 +62,32 @@ export default class Tabs extends Component {
     ) {
       this.adjustScroll()
     }
+    this.observeTabs()
   }
 
   componentWillUnmount () {
+    this.resizeObserver.disconnect()
+  }
+
+  observeTabs = () => {
+    const { resizeObserver, domRef } = this
+    resizeObserver.disconnect()
+    if (!domRef.current) {
+      return
+    }
+    domRef.current.querySelectorAll('.tab').forEach(el => {
+      resizeObserver.observe(el)
+    })
+  }
+
+  // render reads the tab widths from the DOM before React commits the new
+  // titles, so render again once the measured widths differ
+  handleTabsResize = () => {
+    if (this.tabsWidth() !== this.renderedTabsWidth) {
+      this.setState({
+        overflow: this.isOverflow()
+      })
+    }
   }
 
   modifier = (...args) => {
@@ -261,8 +290,7 @@ export default class Tabs extends Component {
   }
 
   renderContent () {
-    const { config } = this.props
-    if (config.useSystemTitleBar) {
+    if (window.store.hasNativeTitleStrip) {
       return this.renderContentInner()
     }
     return (
@@ -273,15 +301,16 @@ export default class Tabs extends Component {
   }
 
   renderContentInner () {
-    const { width, config } = this.props
+    const { width } = this.props
     const tabs = this.getSortedTabs()
     const len = tabs.length
-    const tabsWidthAll = tabMargin * len + 10 + this.tabsWidth()
+    this.renderedTabsWidth = this.tabsWidth()
+    const tabsWidthAll = tabMargin * len + 10 + this.renderedTabsWidth
     const { overflow } = this.state
     const left = overflow
       ? '100%'
       : tabsWidthAll
-    const w1 = isMacJs && (config.useSystemTitleBar || window.et.isWebApp)
+    const w1 = isMacJs && (window.store.isSystemTitleBar || window.et.isWebApp)
       ? 30
       : this.getExtraTabWidth()
     const style = {
@@ -358,9 +387,21 @@ export default class Tabs extends Component {
   }
 
   getExtraTabWidth = () => {
-    return this.shouldRenderWindowControl()
-      ? windowControlWidth
-      : 0
+    if (!this.shouldRenderWindowControl()) {
+      return 0
+    }
+    return window.store.isWindowControlsOverlay
+      ? getWindowControlsOverlayWidth()
+      : windowControlWidth
+  }
+
+  // The pane whose tab bar sits under Windows' native caption buttons is the
+  // same pane that owns the window controls; only it has to clear that strip.
+  // The class is inert unless the root also has .wco.
+  tabsClassName = (extra) => {
+    return classNames('tabs', extra, {
+      'wco-bar': window.store.isWindowControlsOverlay && this.shouldRenderWindowControl()
+    })
   }
 
   renderWindowControl = () => {
@@ -405,8 +446,7 @@ export default class Tabs extends Component {
         {currentTabEl}
       </div>
     )
-    const { config } = this.props
-    if (config.useSystemTitleBar) {
+    if (window.store.hasNativeTitleStrip) {
       return inner
     }
     return (
@@ -439,7 +479,7 @@ export default class Tabs extends Component {
       ? <Tab {...tabProps} key={currentTab.id} />
       : null
     return (
-      <div className='tabs mobile-tabs' ref={this.tabsRef}>
+      <div className={this.tabsClassName('mobile-tabs')} ref={this.tabsRef}>
         {this.renderMobileTabsInner(currentTabEl)}
         {this.renderMobileTabsExtra(items)}
         {this.renderWindowControl()}
@@ -453,7 +493,7 @@ export default class Tabs extends Component {
       return this.renderMobileTabs()
     }
     return (
-      <div className='tabs' ref={this.tabsRef}>
+      <div className={this.tabsClassName()} ref={this.tabsRef}>
         {this.renderContent()}
         {
           this.renderWindowControl()

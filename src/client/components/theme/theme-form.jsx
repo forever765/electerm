@@ -14,7 +14,7 @@ import {
   validThemeProps,
   requiredThemeProps
 } from '../../common/terminal-theme'
-import { defaultTheme, defaultThemeLight } from '../../common/theme-defaults'
+import { defaultThemeId, defaultThemeLightId } from '../../common/theme-defaults'
 import generate from '../../common/uid'
 import { isAIDisabled } from '../../common/ai-feature'
 import Link from '../common/external-link'
@@ -194,27 +194,20 @@ export default function ThemeForm (props) {
     if (!id) {
       return null
     }
-    if (readonly) {
-      return (
-        <FormItem>
-          <Button
-            type='primary'
-            className='mg1r mg1b'
-            onClick={applyOnly}
-          >
-            {e('apply')}
-          </Button>
-          <Button
-            type='dashed'
-            onClick={exporter}
-          >
-            {e('export')}
-          </Button>
-        </FormItem>
-      )
-    }
+    // every theme that exists can be applied from the form, including the ones
+    // that cannot be edited (the built-in defaults, the iterm themes). There
+    // "apply" is the only thing to do, so it is the primary button; on an
+    // editable theme the primary action stays "save and apply" below and this
+    // one only switches to the theme as saved
     return (
       <FormItem>
+        <Button
+          type={disabled ? 'primary' : 'default'}
+          className='mg1r mg1b'
+          onClick={applyOnly}
+        >
+          {e('apply')}
+        </Button>
         <Button
           type='dashed'
           onClick={exporter}
@@ -272,7 +265,7 @@ export default function ThemeForm (props) {
     themeName,
     themeText: convertThemeToText(props.formData)
   }
-  const isDefaultTheme = id === defaultTheme().id || id === defaultThemeLight().id
+  const isDefaultTheme = id === defaultThemeId || id === defaultThemeLightId
   const disabled = readonly || isDefaultTheme
   const pickerProps = {
     onChange: onPickerChange,

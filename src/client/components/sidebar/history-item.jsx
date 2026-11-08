@@ -1,4 +1,5 @@
-import React, { useCallback, useEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
+import classnames from 'classnames'
 import createTitle, { createTitleWithTag } from '../../common/create-title'
 import { DeleteOutlined, BookFilled } from '@ant-design/icons'
 import { refsStatic } from '../common/ref'
@@ -6,18 +7,40 @@ import { refsStatic } from '../common/ref'
 export default function HistoryItem (props) {
   const { store } = window
   const {
-    item
+    item,
+    openOnDoubleClick
   } = props
+  const [active, setActive] = useState(false)
   const timeoutRef = useRef(null)
+  // used by the system menu submenu, which has to dismiss its popover
+  const closeMenu = props.onClose
 
   const handleClick = useCallback(() => {
+    // with doubleClickToOpenBookmark on, a click only marks the row — the
+    // session opens on the double click below
+    if (openOnDoubleClick) {
+      setActive(true)
+      return
+    }
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current)
     }
     timeoutRef.current = setTimeout(() => {
       store.onSelectHistory(item.tab)
     }, 10)
-  }, [item.tab])
+    if (closeMenu) {
+      closeMenu()
+    }
+  }, [item.tab, openOnDoubleClick, closeMenu])
+
+  const handleDoubleClick = useCallback(() => {
+    if (openOnDoubleClick) {
+      store.onSelectHistory(item.tab)
+      if (closeMenu) {
+        closeMenu()
+      }
+    }
+  }, [item.tab, openOnDoubleClick, closeMenu])
 
   useEffect(() => {
     return () => {
@@ -47,9 +70,10 @@ export default function HistoryItem (props) {
   const tt = createTitle(item.tab)
   return (
     <div
-      className='item-list-unit'
+      className={classnames('item-list-unit', { active })}
       title={tt}
       onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
     >
       <div className='elli pd1y pd2x'>
         {title}

@@ -328,9 +328,9 @@ describe('term-touch: releasing a drag', () => {
     assert.deepEqual(dispatched, ['contextmenu'])
   })
 
-  test('pasteWhenContextMenu keeps long press meaning paste', async () => {
+  test('right click behavior "paste" keeps long press meaning paste', async () => {
     setTouchDevice(true)
-    const ctx = await makeCtx({ props: { config: { pasteWhenContextMenu: true } } })
+    const ctx = await makeCtx({ props: { config: { rightClickBehavior: 'paste' } } })
     ctx.pasted = 0
     ctx.onPaste = () => { ctx.pasted++ }
     ctx.touchStartPos = { clientX: 15, clientY: 25, target: {} }
@@ -338,6 +338,64 @@ describe('term-touch: releasing a drag', () => {
     assert.equal(ctx.pasted, 1)
     // no drag is started, so the gesture stays out of the selection path
     assert.equal(ctx.dragSelect, null)
+  })
+
+  test('legacy pasteWhenContextMenu still means paste', async () => {
+    setTouchDevice(true)
+    const ctx = await makeCtx({ props: { config: { pasteWhenContextMenu: true } } })
+    ctx.pasted = 0
+    ctx.onPaste = () => { ctx.pasted++ }
+    ctx.touchStartPos = { clientX: 15, clientY: 25, target: {} }
+    ctx.handleLongPress()
+    assert.equal(ctx.pasted, 1)
+  })
+})
+
+describe('term-touch: context menu from the toolbar icon', () => {
+  const menuTarget = (dispatched) => ({
+    dispatchEvent: (ev) => dispatched.push([ev.type, ev.clientX, ev.clientY])
+  })
+
+  test('dispatches a contextmenu on the terminal node at the given point', async () => {
+    setTouchDevice(true)
+    const dispatched = []
+    const ctx = await makeCtx({
+      domRef: { current: menuTarget(dispatched) }
+    })
+    ctx.openContextMenuAtPoint(12, 34)
+    assert.deepEqual(dispatched, [['contextmenu', 12, 34]])
+  })
+
+  test('falls back to the xterm element before the wrapper ref is set', async () => {
+    setTouchDevice(true)
+    const dispatched = []
+    const term = makeTerm({ element: menuTarget(dispatched) })
+    const ctx = await makeCtx({ term, domRef: { current: null } })
+    ctx.openContextMenuAtPoint(5, 6)
+    assert.deepEqual(dispatched, [['contextmenu', 5, 6]])
+  })
+
+  test('does nothing without a terminal node to dispatch on', async () => {
+    setTouchDevice(true)
+    const ctx = await makeCtx({
+      term: { cols: 80, rows: 24 },
+      domRef: { current: null }
+    })
+    // no throw is the assertion: nothing is mounted yet
+    ctx.openContextMenuAtPoint(1, 2)
+  })
+
+  test('stays shut unless right click behavior is "context"', async () => {
+    setTouchDevice(true)
+    for (const rightClickBehavior of ['paste', 'passthrough']) {
+      const dispatched = []
+      const ctx = await makeCtx({
+        domRef: { current: menuTarget(dispatched) },
+        props: { config: { rightClickBehavior } }
+      })
+      ctx.openContextMenuAtPoint(1, 2)
+      assert.deepEqual(dispatched, [], rightClickBehavior)
+    }
   })
 })
 

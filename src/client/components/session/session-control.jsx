@@ -8,6 +8,7 @@ import {
   PaperClipOutlined,
   ApartmentOutlined,
   MoreOutlined,
+  MenuOutlined,
   ColumnWidthOutlined,
   LogoutOutlined,
   PlusOutlined,
@@ -22,6 +23,7 @@ import {
 } from '../../common/constants'
 import { SplitViewIcon } from '../icons/split-view'
 import { HeartbeatIcon } from '../icons/heartbeat'
+import { rightClickBehaviors } from '../../common/right-click-behavior'
 import './session-control.styl'
 
 const e = window.translate
@@ -39,6 +41,7 @@ export default function SessionControl (props) {
     keepaliveEnabled,
     broadcastInput,
     wrapDisabled,
+    rightClickBehavior,
     onChangePane,
     toggleCheckSftpPathFollowSsh,
     onSshSftpSplitView,
@@ -47,6 +50,7 @@ export default function SessionControl (props) {
     toggleWrap,
     onFullscreen,
     onOpenSearch,
+    onOpenContextMenu,
     onExitGracefully,
     onZoomFontSize
   } = props
@@ -279,7 +283,35 @@ export default function SessionControl (props) {
     )
   }
 
-  function renderTermControls () {
+  /**
+   * Touch devices have no right click, so the terminal's context menu needs a
+   * visible way in: this icon, next to the fullscreen icon on the desktop
+   * toolbar and next to the three-dot toggle in the mobile one (see below).
+   * Hidden when there is no menu to open — right click behaviour 'paste' and
+   * 'passthrough' both drop the menu (see right-click-behavior.js), and the
+   * setting only ever acts on the terminal pane.
+   */
+  function renderContextMenuIcon (inMobileBar) {
+    if (
+      !isTouchDevice ||
+      rightClickBehavior !== rightClickBehaviors.context ||
+      tab.pane !== paneMap.terminal
+    ) {
+      return null
+    }
+    const cls = classnames(
+      'iblock pointer spliter context-menu-control-icon',
+      inMobileBar ? 'mobile-context-menu-toggle' : 'mg1r icon-info'
+    )
+    return (
+      <MenuOutlined
+        className={cls}
+        onClick={onOpenContextMenu}
+      />
+    )
+  }
+
+  function renderTermControls (skipContextMenuIcon) {
     const { pane } = tab
     if (pane !== paneMap.terminal) {
       return null
@@ -287,6 +319,7 @@ export default function SessionControl (props) {
     return (
       <div className='fright term-controls'>
         {renderFontSizeIcons()}
+        {skipContextMenuIcon ? null : renderContextMenuIcon()}
         {renderFullscreenIcon()}
         {renderSearchIcon()}
       </div>
@@ -303,12 +336,13 @@ export default function SessionControl (props) {
         {renderBroadcastIcon()}
         {renderWrapIcon()}
         {renderExitGracefullyIcon()}
-        {renderTermControls()}
+        {renderTermControls(true)}
       </div>
     )
     return (
       <div className='terminal-control mobile-session-control'>
         {renderPaneControl()}
+        {renderContextMenuIcon(true)}
         <Popover
           content={extraIcons}
           trigger='click'

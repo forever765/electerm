@@ -13,7 +13,12 @@ import wait from '../../common/wait'
 import classnames from 'classnames'
 import sorterIndex from '../../common/index-sorter'
 import { handleErr } from '../../common/fetch'
-import { getLocalFileInfo, getRemoteFileInfo, getFolderFromFilePath } from './file-read'
+import {
+  getLocalFileInfo,
+  getLocalFileInfoFromStat,
+  getRemoteFileInfo,
+  getFolderFromFilePath
+} from './file-read'
 import {
   typeMap, maxSftpHistory, paneMap,
   fileTypeMap,
@@ -23,6 +28,8 @@ import {
   sftpRetryInterval
 } from '../../common/constants'
 import { hasFileInClipboardText } from '../../common/clipboard'
+import { credentialsFromProvider } from '../../common/credential-provider.jsx'
+import { credentialOptions } from '../../common/credential-provider-utils.js'
 import Client from '../../common/sftp'
 import ListTable from './list-table-ui'
 import deepCopy from 'json-deep-copy'
@@ -31,6 +38,7 @@ import normalizeRemotePath from '../../common/normalize-remote-path'
 import { LoadingOutlined, ReloadOutlined } from '@ant-design/icons'
 import * as owner from './owner-list'
 import AddressBar from './address-bar'
+import KeywordBar from './keyword-bar'
 import getProxy from '../../common/get-proxy'
 import { createTerm } from '../terminal/terminal-apis'
 import './sftp.styl'
@@ -126,6 +134,9 @@ export default class Sftp extends Component {
       termType: 'ftp',
       ...tab
     })
+    // a bookmark that asks a password manager for its password, when it has
+    // none saved: ftp keeps the user name in `user`
+    Object.assign(opts, credentialOptions(await credentialsFromProvider(tab), 'ftp'))
     const r = await createTerm(opts)
       .catch(err => {
         const text = err.message
@@ -273,6 +284,55 @@ export default class Sftp extends Component {
     })
   }
 
+  // Side (local/remote) the mouse is currently over; used by type-to-filter
+  hoverType = null
+
+  onMouseEnterSection = (type) => {
+    this.hoverType = type
+  }
+
+  getTypeToFilterTarget = () => {
+    return this.hoverType ||
+      this.state.lastClickedFile?.type ||
+      typeMap.local
+  }
+
+  // Type-to-filter: plain keystrokes edit the keyword of the hovered
+  // (or last clicked) file list. Returns true when the event was consumed.
+  handleTypeToFilter = (e) => {
+    if (
+      e.type !== 'keydown' ||
+      e.ctrlKey || e.metaKey || e.altKey || e.isComposing ||
+      this.state.onEditFile
+    ) {
+      return false
+    }
+    const type = this.getTypeToFilterTarget()
+    const prop = `${type}Keyword`
+    let edit
+    if (e.key === 'Backspace') {
+      if (!this.state[prop]) {
+        return false
+      }
+      edit = k => k.slice(0, -1)
+    } else if (e.key === 'Escape') {
+      if (!this.state[prop]) {
+        return false
+      }
+      edit = () => ''
+    } else if (e.key.length === 1) {
+      edit = k => k + e.key
+    } else {
+      return false
+    }
+    e.preventDefault()
+    e.stopPropagation()
+    this.setState(prev => ({
+      [prop]: edit(prev[prop] || '')
+    }))
+    return true
+  }
+
   getCwdLocal = () => {
     if (
       !this.shouldRenderRemote() &&
@@ -293,9 +353,27 @@ export default class Sftp extends Component {
       if (!path && this.sftp) {
         path = await this.getPwd(this.props.tab.username)
       }
+      if (!path) {
+        // No sftp connection yet (still connecting, or the previous attempt
+        // failed). There is no remote home to resolve, and navigating to an
+        // unknown path would blank the panel, so (re)start the connection and
+        // let its own listing decide the path.
+        if (
+          !this.sftp &&
+          !this.state.loadingSftp &&
+          !this.state.remoteLoading
+        ) {
+          this.initData(this.terminalId, this.port)
+        }
+        return
+      }
       path = normalizeRemotePath(path)
     } else {
       path = this.getLocalHome()
+    }
+
+    if (typeof path !== 'string' || !path) {
+      return
     }
 
     this.setState({
@@ -862,6 +940,27 @@ export default class Sftp extends Component {
     window.pre.homeOrTmp
   }
 
+  // The whole directory in one round trip when the backend supports it
+  // (`readdir` + per-entry `lstat` together). Falls back to the old "two calls
+  // per entry" path against an older server (electerm-web can serve a frontend
+  // that is newer than its backend).
+  getLocalList = async (localPath) => {
+    if (window.fs.readdirStatAsync) {
+      const list = await window.fs.readdirStatAsync(localPath)
+      return list.map(d =>
+        getLocalFileInfoFromStat(resolve(localPath, d.name), d)
+      )
+    }
+    const names = await window.fs.readdirAsync(localPath)
+    const results = await Promise.all(
+      names.map(name => {
+        const p = resolve(localPath, name)
+        return getLocalFileInfo(p).catch(console.log)
+      })
+    )
+    return results.filter(Boolean)
+  }
+
   localList = async (returnList = false, localPathReal, oldPath) => {
     if (!window.fs) return
     if (!returnList) {
@@ -877,14 +976,7 @@ export default class Sftp extends Component {
       const localPath = noPathInit ||
         this.getCwdLocal() ||
         this.getLocalHome()
-      const locals = await window.fs.readdirAsync(localPath)
-      const results = await Promise.all(
-        locals.map(name => {
-          const p = resolve(localPath, name)
-          return getLocalFileInfo(p).catch(console.log)
-        })
-      )
-      const local = results.filter(Boolean)
+      const local = await this.getLocalList(localPath)
       const update = {
         local,
         inited: true,
@@ -1033,6 +1125,9 @@ export default class Sftp extends Component {
   goParent = (type) => {
     const n = `${type}Path`
     const p = this.state[n]
+    if (typeof p !== 'string' || !p) {
+      return
+    }
     let np = resolve(p, '..')
     if (type === typeMap.remote) {
       np = normalizeRemotePath(np)
@@ -1136,6 +1231,11 @@ export default class Sftp extends Component {
 
   renderParentItem = (type) => {
     const currentPath = this.state[`${type}Path`]
+    // The path can be momentarily unknown (e.g. the remote home while the sftp
+    // client is still connecting). Show no parent item rather than throwing.
+    if (typeof currentPath !== 'string') {
+      return null
+    }
     const parentPath = resolve(currentPath, '..')
     // Don't render parent item if we're at the root
     if (parentPath === currentPath) {
@@ -1255,8 +1355,7 @@ export default class Sftp extends Component {
           'onInputBlur',
           'toggleShowHiddenFile',
           'goParent',
-          'onClickHistory',
-          'updateKeyword'
+          'onClickHistory'
         ]
       ),
       ...pick(
@@ -1268,8 +1367,7 @@ export default class Sftp extends Component {
           `${type}Path`,
           `${type}PathHistory`,
           `${type}InputFocus`,
-          'loadingSftp',
-          `${type}Keyword`
+          'loadingSftp'
         ]
       )
     }
@@ -1278,6 +1376,7 @@ export default class Sftp extends Component {
         className={`sftp-section sftp-${type}-section tw-${type}`}
         style={style}
         key={type}
+        onMouseEnter={() => this.onMouseEnterSection(type)}
         {...style}
       >
         <Spin spinning={loading}>
@@ -1287,6 +1386,11 @@ export default class Sftp extends Component {
             }
             <AddressBar
               {...addrProps}
+            />
+            <KeywordBar
+              keyword={this.state[`${type}Keyword`]}
+              type={type}
+              updateKeyword={this.updateKeyword}
             />
             <div
               className={`file-list ${type} relative`}

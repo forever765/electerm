@@ -82,6 +82,14 @@ export default store => {
       }
       return store[name]
     }, schedule)
+    // Make the current store contents the watcher's baseline, so a later
+    // start() diffs against the store rather than a snapshot that no longer
+    // describes it. Needed after a rolled-back import: the store has just been
+    // restored to its pre-import state, and diffing that against the snapshot
+    // taken before the import would be read as "every record was removed".
+    window[`watch${name}`].reseed = () => {
+      refsStatic.add('oldState-' + name, deepCopy(store.getItems(name)) || [])
+    }
     window[`watch${name}`].start()
   }
 
@@ -151,7 +159,9 @@ export default store => {
       window.pre.runGlobalAsync('setTitle', title)
       window.store.currentLayoutBatch = tab.batch
     }
-    if (tab && store.rightPanelVisible) {
+    // refreshing the info panel on tab switch only concerns the info tab: the
+    // right panel can also be showing the AI chat or the cmd history
+    if (tab && store.rightPanelVisible && store.rightPanelTab === 'info') {
       window.store.openInfoPanelAction()
     }
     return store.activeTabId

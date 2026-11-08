@@ -4,12 +4,15 @@ import {
   Select,
   Input
 } from 'antd'
+import { RobotOutlined } from '@ant-design/icons'
 import message from '../common/message'
-import SwitchLabel from '../common/switch'
 import { useState } from 'react'
 import generate from '../../common/uid'
 import InputAutoFocus from '../common/input-auto-focus'
 import renderQm from './quick-commands-list-form'
+import QuickCommandAiEditor from './quick-command-ai-editor'
+import ResponsiveTabs from '../common/responsive-tabs'
+import { isAIDisabled } from '../../common/ai-feature'
 import ShortcutEdit from '../shortcuts/shortcut-editor'
 import { getKeysTakenData } from '../shortcuts/shortcut-utils'
 import deepCopy from 'json-deep-copy'
@@ -18,6 +21,8 @@ import HelpIcon from '../common/help-icon'
 
 const FormItem = Form.Item
 const { Option } = Select
+const manualTab = 'qm-form-manual'
+const aiTab = 'qm-form-ai'
 const e = window.translate
 
 export default function QuickCommandForm (props) {
@@ -25,6 +30,7 @@ export default function QuickCommandForm (props) {
   const { store, formData } = props
   const { quickCommandTags = [] } = store
   const [shortcut, setShortcut] = useState(formData.shortcut || '')
+  const [tab, setTab] = useState(manualTab)
   const uid = formData.id || generate()
   const updateConfig = (name, value) => {
     form.setFieldsValue({
@@ -54,20 +60,33 @@ export default function QuickCommandForm (props) {
     const {
       name,
       commands,
-      inputOnly,
       labels,
       shortcut
     } = res
+    // a wait step with nothing to wait for would run as a no-op, and its
+    // input sits in a noStyle FormItem, which cannot show an error itself
+    const blankWait = (commands || []).some(
+      c => c && c.type === 'wait' && !String(c.text || '').trim()
+    )
+    if (blankWait) {
+      message.warning(e('required'))
+      return
+    }
+    // each step has its own Enter setting now, which replaces inputOnly
     const update = deepCopy({
       name,
       commands,
-      inputOnly,
+      inputOnly: false,
       labels,
       shortcut
     })
     const update1 = {
       ...update,
       id: uid
+    }
+    // a hidden flag so recordings can be listed on their own later
+    if (formData.isRecorded) {
+      update1.isRecorded = true
     }
     if (formData.id) {
       store.editQuickCommand(formData.id, update)
@@ -86,6 +105,26 @@ export default function QuickCommandForm (props) {
     message.success(e('saved'))
     props.onSaved?.()
   }
+
+  // AI generated quick command: write it into the same form (so the user can
+  // review/edit it) and jump back to the manual tab, where the save button is
+  function handleAiGenerated (data) {
+    const update = {
+      name: data.name,
+      commands: (data.commands || []).map(c => ({
+        ...c,
+        // the step rows read the type: an AI step is a command step
+        type: c.type || 'command',
+        enter: !data.inputOnly
+      }))
+    }
+    if (data.labels.length) {
+      update.labels = data.labels
+    }
+    form.setFieldsValue(update)
+    setTab(manualTab)
+  }
+
   const initialValues = formData
   if (!initialValues.labels) {
     initialValues.labels = []
@@ -94,9 +133,21 @@ export default function QuickCommandForm (props) {
     initialValues.commands = [{
       command: initialValues.command || '',
       id: generate(),
-      delay: 100
+      // very old single-command quick commands waited 100 ms
+      delay: initialValues.command ? 100 : 0
     }]
   }
+  // quick commands saved before per-step Enter follow the old inputOnly
+  initialValues.commands = initialValues.commands.map(c => {
+    if (c.type === 'key' || c.type === 'wait' || c.type === 'prompt') {
+      return c
+    }
+    return {
+      ...c,
+      type: 'command',
+      enter: typeof c.enter === 'boolean' ? c.enter : !initialValues.inputOnly
+    }
+  })
   const editorProps = {
     data: {
       name: uid,
@@ -112,6 +163,104 @@ export default function QuickCommandForm (props) {
     return `{{${t}}}`
   }).join(', ')
   const wiki = 'https://github.com/electerm/electerm/wiki/quick-command-templates'
+  const aiDisabled = isAIDisabled()
+  // renderQm() uses hooks internally, so it must run on every render
+  const qmItem = renderQm(form)
+  const manualPane = (
+    <>
+      <FormItem
+        label={e('quickCommandName')}
+        rules={[{
+          max: 60, message: '60 chars max'
+        }, {
+          required: true, message: 'Name required'
+        }]}
+        hasFeedback
+        name='name'
+      >
+        <InputAutoFocus />
+      </FormItem>
+      {qmItem}
+      <FormItem
+        name='labels'
+        label={e('labels')}
+      >
+        <Select
+          mode='tags'
+        >
+          {
+            quickCommandTags.map(q => {
+              return (
+                <Option value={q} key={'qmt-' + q}>
+                  {q}
+                </Option>
+              )
+            })
+          }
+        </Select>
+      </FormItem>
+      <FormItem
+        label={e('settingShortcuts')}
+        name='shortcut'
+      >
+        <div>
+          <Input className='hide' />
+          <ShortcutEdit
+            {...editorProps}
+          />
+        </div>
+      </FormItem>
+      <FormItem>
+        <p>
+          <Button
+            type='primary'
+            htmlType='submit'
+          >{e('save')}
+          </Button>
+        </p>
+      </FormItem>
+      <p>
+        <b className='mg1r'>{e('templates')}:</b>
+        <span className='mg1r'>{templatesStr}</span>
+        <HelpIcon
+          link={wiki}
+        />
+      </p>
+    </>
+  )
+  const tabsProps = {
+    activeKey: tab,
+    onChange: setTab,
+    className: 'qm-form-tabs',
+    size: 'small',
+    items: [
+      {
+        key: manualTab,
+        label: e('quickCommand')
+      },
+      ...(!aiDisabled
+        ? [{
+            key: aiTab,
+            label: (
+              <span className='qm-form-tab-ai'>
+                <RobotOutlined className='mg1r' />
+                AI
+              </span>
+            )
+          }]
+        : [])
+    ]
+  }
+  const aiPane = (
+    <>
+      <ResponsiveTabs {...tabsProps} />
+      {
+        tab === aiTab
+          ? <QuickCommandAiEditor onChange={handleAiGenerated} />
+          : manualPane
+      }
+    </>
+  )
   return (
     <>
       <Form
@@ -121,71 +270,7 @@ export default function QuickCommandForm (props) {
         layout='vertical'
         initialValues={initialValues}
       >
-        <FormItem
-          label={e('quickCommandName')}
-          rules={[{
-            max: 60, message: '60 chars max'
-          }, {
-            required: true, message: 'Name required'
-          }]}
-          hasFeedback
-          name='name'
-        >
-          <InputAutoFocus />
-        </FormItem>
-        {renderQm(form)}
-        <FormItem
-          name='labels'
-          label={e('label')}
-        >
-          <Select
-            mode='tags'
-          >
-            {
-              quickCommandTags.map(q => {
-                return (
-                  <Option value={q} key={'qmt-' + q}>
-                    {q}
-                  </Option>
-                )
-              })
-            }
-          </Select>
-        </FormItem>
-        <FormItem
-          label={e('settingShortcuts')}
-          name='shortcut'
-        >
-          <div>
-            <Input className='hide' />
-            <ShortcutEdit
-              {...editorProps}
-            />
-          </div>
-        </FormItem>
-        <FormItem
-          label={e('inputOnly')}
-          name='inputOnly'
-          valuePropName='checked'
-        >
-          <SwitchLabel />
-        </FormItem>
-        <FormItem>
-          <p>
-            <Button
-              type='primary'
-              htmlType='submit'
-            >{e('save')}
-            </Button>
-          </p>
-        </FormItem>
-        <p>
-          <b className='mg1r'>{e('templates')}:</b>
-          <span className='mg1r'>{templatesStr}</span>
-          <HelpIcon
-            link={wiki}
-          />
-        </p>
+        {aiDisabled ? manualPane : aiPane}
       </Form>
     </>
   )

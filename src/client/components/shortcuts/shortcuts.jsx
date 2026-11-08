@@ -12,6 +12,7 @@ import {
 } from './shortcut-utils.js'
 
 const e = window.translate
+
 const shortcutsDefaults = shortcutsDefaultsGen()
 
 export default class Shortcuts extends PureComponent {
@@ -41,6 +42,8 @@ export default class Shortcuts extends PureComponent {
           index: i + 1,
           name,
           readonly: c.readonly,
+          // shortcuts that are unbound by default can be cleared again
+          clearable: !c.readonly && !c[propName],
           shortcut: c.readonly ? c[propName] : (shortcuts[name] || c[propName])
         }
       })
@@ -90,6 +93,8 @@ export default class Shortcuts extends PureComponent {
               data={inst}
               keysTaken={getKeysTakenData()}
               updateConfig={this.updateConfig}
+              renderClear={inst.clearable}
+              handleClear={() => this.updateConfig(inst.name, '')}
             />
           )
         }

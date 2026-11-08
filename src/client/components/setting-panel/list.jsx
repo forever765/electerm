@@ -9,7 +9,7 @@ import createName, { createTitleTag } from '../../common/create-title'
 import classnames from 'classnames'
 import { noop } from 'lodash-es'
 import highlight from '../common/highlight'
-import { settingSyncId, settingCommonId, staticNewItemTabs } from '../../common/constants'
+import { staticNewItemTabs, undeletableIds } from '../../common/constants'
 import getInitItem from '../../common/init-setting-item'
 
 const e = window.translate
@@ -64,7 +64,7 @@ export default class ItemList extends React.PureComponent {
   }
 
   renderDelBtn = item => {
-    if (!item.id || [settingSyncId, settingCommonId].includes(item.id) || item.id.startsWith('default')) {
+    if (!item.id || undeletableIds.has(item.id)) {
       return null
     }
     const { shouldConfirmDel } = this.props
@@ -188,7 +188,9 @@ export default class ItemList extends React.PureComponent {
         <div className='item-list-wrap' style={listStyle}>
           {this.renderNewItem()}
           {
-            list.map(this.renderItem)
+            this.renderList
+              ? this.renderList(list)
+              : list.map(this.renderItem)
           }
         </div>
       </div>

@@ -17,28 +17,30 @@ import {
   validateBookmarkData
 } from '../components/bookmark-form/fix-bookmark-default'
 import newTerm from '../common/new-terminal'
+import dangerousSessionFields from '../common/dangerous-session-fields'
+import {
+  decideTransferApproval,
+  normalizeConflictPolicy
+} from '../common/mcp-transfer-guard.js'
+import confirmMcpTransfer from '../components/common/mcp-transfer-approval.jsx'
 
 // Dangerous props that must not be accepted from MCP/AI tool calls.
-// Mirrors the blocklist in src/client/store/tab.js (dangerousTabProps).
-// These allow arbitrary command execution if set (e.g. execLinux/execLinuxArgs
-// override the shell binary, setEnv injects environment variables, runScripts
-// executes scripts, interactiveValues injects interactive prompts).
-const dangerousTabProps = [
-  'execLinux',
-  'execMac',
-  'execWindows',
-  'execWindowsArgs',
-  'execMacArgs',
-  'execLinuxArgs',
-  'setEnv',
-  'runScripts',
-  'interactiveValues'
-]
+// Shared with src/client/store/tab.js and the quick connect parser so the
+// copies cannot drift apart. These allow arbitrary command execution if set
+// (execLinux/execLinuxArgs override the shell binary, setEnv injects
+// environment variables, runScripts executes scripts, interactiveValues
+// injects interactive prompts, triggers auto-answer terminal output,
+// proxyCommand is spawned before any SSH authentication).
+const dangerousTabProps = dangerousSessionFields
 
 // Tab/session UI state keys that must never be set by MCP/AI callers.
 // A crafted `batch` (missing, string, or out-of-range) used to crash the
 // Sessions render (`sizes[batch]` undefined -> cannot destructure height).
 // `addTab` now clamps batch too, but strip here as first line of defense.
+// `keepaliveEnabled` is runtime session state owned by the dedicated
+// set_electerm_terminal_keepalive tool — a tab opened through open_tab
+// must not be able to arrive already "keepalive on" while its terminal is
+// not sending anything.
 const tabInternalProps = [
   'batch',
   'id',
@@ -50,6 +52,7 @@ const tabInternalProps = [
   'sftpCreated',
   'isTransporting',
   'mcpStatus',
+  'keepaliveEnabled',
   'activeTabId',
   'sshSftpSplitView',
   'sshTunnelResults',
@@ -125,7 +128,12 @@ export default Store => {
       try {
         const { requestId, action, data } = request || {}
         if (action === 'tool-call') {
-          window.store.handleMcpToolCall(requestId, data && data.toolName, data && data.args)
+          window.store.handleMcpToolCall(
+            requestId,
+            data && data.toolName,
+            data && data.args,
+            data && data.transferPolicy
+          )
         }
       } catch (err) {
         // Never let a malformed IPC payload break the UI thread
@@ -135,7 +143,7 @@ export default Store => {
   }
 
   // Handle individual tool calls
-  Store.prototype.handleMcpToolCall = async function (requestId, toolName, args) {
+  Store.prototype.handleMcpToolCall = async function (requestId, toolName, args, transferPolicy) {
     const { store } = window
     args = args || {}
 
@@ -229,6 +237,9 @@ export default Store => {
         case 'cancel_terminal_command':
           result = store.mcpCancelTerminalCommand(args)
           break
+        case 'set_terminal_keepalive':
+          result = store.mcpSetTerminalKeepalive(args)
+          break
         case 'execute_command':
           result = await store.mcpExecuteCommand(args)
           break
@@ -266,10 +277,10 @@ export default Store => {
 
         // File transfer operations
         case 'sftp_upload':
-          result = await store.mcpSftpUpload(args)
+          result = await store.mcpSftpUpload(args, transferPolicy)
           break
         case 'sftp_download':
-          result = await store.mcpSftpDownload(args)
+          result = await store.mcpSftpDownload(args, transferPolicy)
           break
 
         // Transfer list/history operations
@@ -312,8 +323,8 @@ export default Store => {
   // ==================== Bookmark APIs ====================
 
   const bookmarkSensitiveFields = [
-    'password', 'privateKey', 'passphrase', 'certificate', 'proxy',
-    'connectionHoppings', 'sshTunnels'
+    'password', 'privateKey', 'privateKeyPath', 'passphrase', 'certificate',
+    'certificatePath', 'proxy', 'connectionHoppings', 'sshTunnels'
   ]
   const bookmarkFeatureFields = [
     'connectionHoppings', 'sshTunnels', 'quickCommands', 'runScripts'
@@ -514,6 +525,7 @@ export default Store => {
         status: t.status,
         from: t.from,
         mcpStatus: t.mcpStatus || '',
+        keepalive: !!t.keepaliveEnabled,
         isTransporting: t.isTransporting,
         onData: refsTabs.get('tab-' + t.id)?.state.terminalOnData,
         batch: t.batch
@@ -826,6 +838,7 @@ export default Store => {
       throw new Error('No active terminal')
     }
 
+    const tab = store.tabs.find(t => t.id === tabId)
     const tabRef = refsTabs.get('tab-' + tabId)
     const onData = tabRef?.state.terminalOnData || ''
     const term = refs.get('term-' + tabId)
@@ -857,8 +870,54 @@ export default Store => {
       isRunning: onData === 'feed',
       hasPasswordPrompt: onData === 'password',
       isIdle: !onData,
+      // Read the live terminal when it is mounted (that is what actually
+      // sends keepalives); fall back to the tab mirror for a tab whose
+      // terminal has not been created yet.
+      keepalive: term && typeof term.getKeepalive === 'function'
+        ? term.getKeepalive()
+        : !!(tab && tab.keepaliveEnabled),
       output,
       lineCount
+    }
+  }
+
+  // Enable/disable the per-session keepalive — the same switch the heartbeat
+  // icon in the session toolbar drives (attach-addon-custom._checkKeepalive
+  // writes a newline to the PTY once the session has been idle, which resets
+  // shell idle timers). This is what keeps a session alive during a long
+  // SFTP transfer when nobody is typing into the terminal.
+  Store.prototype.mcpSetTerminalKeepalive = function (args) {
+    const { store } = window
+    const tabId = (args && args.tabId) || store.activeTabId
+    if (!tabId) {
+      throw new Error('No active terminal')
+    }
+    if (typeof (args && args.enabled) !== 'boolean') {
+      throw new Error('enabled (boolean) is required')
+    }
+
+    const tab = store.tabs.find(t => t.id === tabId)
+    if (!tab) {
+      throw new Error(`Tab not found: ${tabId}`)
+    }
+
+    const term = refs.get('term-' + tabId)
+    if (!term || typeof term.setKeepalive !== 'function') {
+      throw new Error(`Terminal not ready for tab "${tabId}"`)
+    }
+
+    const enabled = term.setKeepalive(args.enabled)
+    // Mirror onto the tab so the toolbar heartbeat icon reflects an
+    // MCP-driven change (the tab flag is what the icon renders).
+    tab.keepaliveEnabled = enabled
+
+    return {
+      success: true,
+      tabId,
+      keepalive: enabled,
+      message: enabled
+        ? 'Session keepalive enabled'
+        : 'Session keepalive disabled'
     }
   }
 
@@ -1329,7 +1388,50 @@ export default Store => {
 
   // ==================== File Transfer APIs ====================
 
-  Store.prototype.mcpSftpUpload = async function (args) {
+  // A transfer asked for by an MCP client is not the same thing as one asked
+  // for by the human in front of the machine: the client may be acting on
+  // instructions hidden in a file it was just asked to summarise. So:
+  //
+  //   1. a destination that the host executes (shell rc, ssh trust store,
+  //      autostart) or a source that holds credentials always asks first;
+  //   2. whitelist mode asks for every transfer;
+  //   3. an overwrite falls through to the ordinary transfer conflict dialog,
+  //      because no resolution policy is attached to the transfer item;
+  //   4. only `autoConfirmTransfers` (off by default) attaches that policy,
+  //      and never for a path covered by 1.
+  //
+  // Returns the per-transfer `resolvePolicy` to attach, or null.
+  Store.prototype.mcpApproveTransfer = async function (spec, transferOptions) {
+    const options = transferOptions || {}
+    const verdict = decideTransferApproval({
+      direction: spec.direction,
+      fromPath: spec.fromPath,
+      toPath: spec.toPath,
+      strict: !!options.strict,
+      homeDir: window.pre && window.pre.homeOrTmp
+    })
+    const sensitive = verdict.reasons.some(reason => reason.code !== 'strict-mode')
+    if (verdict.requireApproval) {
+      const approved = await confirmMcpTransfer({
+        direction: spec.direction,
+        fromPath: spec.fromPath,
+        toPath: spec.toPath,
+        reasons: verdict.reasons,
+        host: spec.host
+      })
+      if (!approved) {
+        throw new Error(
+          `MCP ${spec.direction} refused by the user: ${spec.fromPath} -> ${spec.toPath}`
+        )
+      }
+    }
+    if (!options.autoConfirm || sensitive) {
+      return null
+    }
+    return normalizeConflictPolicy(spec.conflictPolicy)
+  }
+
+  Store.prototype.mcpSftpUpload = async function (args, transferOptions) {
     const { store } = window
     const { tab, tabId } = store.mcpGetSshSftpRef(args.tabId)
     const localPath = args.localPath
@@ -1340,8 +1442,6 @@ export default Store => {
     if (!remotePath) {
       throw new Error('remotePath is required')
     }
-
-    window._transferConflictPolicy = args.conflictPolicy || 'mergeOrOverwriteAll'
 
     const fromFile = await getLocalFileInfo(localPath)
     const transferItem = {
@@ -1364,6 +1464,17 @@ export default Store => {
       operation: ''
     }
 
+    const resolvePolicy = await store.mcpApproveTransfer({
+      direction: 'upload',
+      fromPath: localPath,
+      toPath: remotePath,
+      conflictPolicy: args.conflictPolicy,
+      host: tab.host
+    }, transferOptions)
+    if (resolvePolicy) {
+      transferItem.resolvePolicy = resolvePolicy
+    }
+
     store.addTransferList([transferItem])
 
     return {
@@ -1374,7 +1485,7 @@ export default Store => {
     }
   }
 
-  Store.prototype.mcpSftpDownload = async function (args) {
+  Store.prototype.mcpSftpDownload = async function (args, transferOptions) {
     const { store } = window
     const { sftp, tab, tabId } = store.mcpGetSshSftpRef(args.tabId) // sftp used for getRemoteFileInfo
     const remotePath = args.remotePath
@@ -1385,8 +1496,6 @@ export default Store => {
     if (!localPath) {
       throw new Error('localPath is required')
     }
-
-    window._transferConflictPolicy = args.conflictPolicy || 'mergeOrOverwriteAll'
 
     const fromFile = await getRemoteFileInfo(sftp, remotePath)
     const transferItem = {
@@ -1404,6 +1513,17 @@ export default Store => {
       id: uid(),
       title: tab.title,
       tabId
+    }
+
+    const resolvePolicy = await store.mcpApproveTransfer({
+      direction: 'download',
+      fromPath: remotePath,
+      toPath: localPath,
+      conflictPolicy: args.conflictPolicy,
+      host: tab.host
+    }, transferOptions)
+    if (resolvePolicy) {
+      transferItem.resolvePolicy = resolvePolicy
     }
 
     store.addTransferList([transferItem])
